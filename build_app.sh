@@ -8,7 +8,7 @@ echo "==> Building Council of Experts SwiftUI App (Release)..."
 swift build --package-path platforms/apple -c release --product CouncilOfExpertsApp
 
 echo "==> Creating App Bundle Structure..."
-APP_DIR="CouncilOfExperts.app"
+APP_DIR="build/CouncilOfExperts.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
