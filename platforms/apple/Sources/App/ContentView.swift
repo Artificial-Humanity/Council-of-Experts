@@ -13,9 +13,7 @@ struct ContentView: View {
                             .font(.headline)
                             .foregroundColor(.primary)
                         Spacer()
-                        Button(action: {
-                            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                        }) {
+                        SettingsLink {
                             Image(systemName: "gearshape")
                                 .font(.title3)
                         }

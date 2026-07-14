@@ -1,5 +1,5 @@
 [package]
-name = "panel-of-experts-core"
+name = "council-of-experts-core"
 version = "0.1.0"
 edition = "2021"
 

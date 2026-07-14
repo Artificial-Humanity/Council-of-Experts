@@ -1,4 +1,0 @@
-framework module panel_of_experts_ffiFFI {
-    header "panel_of_experts_ffiFFI.h"
-    export *
-}

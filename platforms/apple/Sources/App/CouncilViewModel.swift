@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import PanelOfExpertsKit
+import CouncilOfExpertsKit
 
 struct ExpertState {
     var id: String

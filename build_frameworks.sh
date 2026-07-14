@@ -17,9 +17,9 @@ GEN_SWIFT="$OUT/Sources/Kit/Generated"
 FFI_HEADERS="$OUT/FFIHeaders"
 STAGING="$ROOT/.build_frameworks"
 
-CRATE="panel-of-experts-ffi"
-lib_name="panel_of_experts_ffi"
-module="panel_of_experts_ffiFFI"
+CRATE="council-of-experts-ffi"
+lib_name="council_of_experts_ffi"
+module="council_of_experts_ffiFFI"
 
 echo "==> Building Rust crate (release)…"
 cargo build --release --lib
@@ -32,7 +32,7 @@ echo "==> Processing $CRATE (module: $module)…"
 # 1. Regenerate Swift bindings + C header + modulemap from the built dylib.
 bindgen_dir="$STAGING/bindgen"
 mkdir -p "$bindgen_dir"
-cargo run -q -p panel-of-experts-ffi --bin uniffi-bindgen -- \
+cargo run -q -p council-of-experts-ffi --bin uniffi-bindgen -- \
     generate --library "target/release/lib${lib_name}.dylib" \
     --language swift --out-dir "$bindgen_dir"
 

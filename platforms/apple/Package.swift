@@ -2,37 +2,37 @@
 import PackageDescription
 
 let package = Package(
-    name: "PanelOfExpertsKit",
+    name: "CouncilOfExpertsKit",
     platforms: [
         .macOS(.v14), .iOS(.v17)
     ],
     products: [
-        .library(name: "PanelOfExpertsKit", targets: ["PanelOfExpertsKit"]),
-        .executable(name: "PanelOfExpertsApp", targets: ["PanelOfExpertsApp"])
+        .library(name: "CouncilOfExpertsKit", targets: ["CouncilOfExpertsKit"]),
+        .executable(name: "CouncilOfExpertsApp", targets: ["CouncilOfExpertsApp"])
     ],
     dependencies: [],
     targets: [
         // FFI Binary target
         .binaryTarget(
-            name: "panel_of_experts_ffiFFI",
-            path: "panel_of_experts_ffiFFI.xcframework"
+            name: "council_of_experts_ffiFFI",
+            path: "council_of_experts_ffiFFI.xcframework"
         ),
         
         // Swift wrapper module
         .target(
-            name: "PanelOfExpertsKit",
+            name: "CouncilOfExpertsKit",
             dependencies: [
-                "panel_of_experts_ffiFFI"
+                "council_of_experts_ffiFFI"
             ],
             path: "Sources/Kit"
         ),
         
         // SwiftUI App executable
         .executableTarget(
-            name: "PanelOfExpertsApp",
+            name: "CouncilOfExpertsApp",
             dependencies: [
-                "PanelOfExpertsKit",
-                "panel_of_experts_ffiFFI"
+                "CouncilOfExpertsKit",
+                "council_of_experts_ffiFFI"
             ],
             path: "Sources/App"
         )

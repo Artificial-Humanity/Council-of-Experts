@@ -1,8 +1,8 @@
 import SwiftUI
-import PanelOfExpertsKit
+import CouncilOfExpertsKit
 
 @main
-struct PanelOfExpertsApp: App {
+struct CouncilOfExpertsApp: App {
     init() {
         let verifyText = verifyFfiBridge()
         print("FFI Initialization Check: \(verifyText)")

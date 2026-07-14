@@ -1,4 +1,4 @@
-framework module panel_of_experts_ffiFFI {
-    header "panel_of_experts_ffiFFI.h"
+framework module council_of_experts_ffiFFI {
+    header "council_of_experts_ffiFFI.h"
     export *
 }

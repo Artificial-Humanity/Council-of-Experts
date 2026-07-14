@@ -1,5 +1,5 @@
 use thiserror::Error;
-use panel_of_experts_core as core;
+use council_of_experts_core as core;
 use std::sync::Arc;
 
 uniffi::setup_scaffolding!();
