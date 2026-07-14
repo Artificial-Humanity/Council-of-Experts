@@ -26,6 +26,101 @@ struct ContentView: View {
                     
                     Divider()
                     
+                    // Workspace Directory Integration (Milestone 7)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Workspace Directory")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                        
+                        if viewModel.workspacePath.isEmpty {
+                            Button(action: {
+                                viewModel.selectDirectory()
+                            }) {
+                                HStack {
+                                    Image(systemName: "folder.badge.plus")
+                                    Text("Select Directory...")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundColor(.purple)
+                                    Text(URL(fileURLWithPath: viewModel.workspacePath).lastPathComponent)
+                                        .fontWeight(.medium)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Button(action: {
+                                        viewModel.selectDirectory()
+                                    }) {
+                                        Image(systemName: "pencil")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Change Directory")
+                                    
+                                    Button(action: {
+                                        viewModel.refreshFiles()
+                                    }) {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Refresh Files")
+                                }
+                                .font(.caption)
+                                
+                                Text(viewModel.workspacePath)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                
+                                if !viewModel.scannedFiles.isEmpty {
+                                    DisclosureGroup("Workspace Files (\(viewModel.scannedFiles.count))") {
+                                        ScrollView {
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                ForEach(viewModel.scannedFiles, id: \.path) { fileURL in
+                                                    let relPath = fileURL.path.replacingOccurrences(of: viewModel.workspacePath + "/", with: "")
+                                                    let isSelected = viewModel.selectedFilePaths.contains(fileURL.path)
+                                                    
+                                                    Button(action: {
+                                                        viewModel.toggleFileSelection(path: fileURL.path)
+                                                    }) {
+                                                        HStack(alignment: .top) {
+                                                            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                                                                .foregroundColor(isSelected ? .purple : .secondary)
+                                                            Text(relPath)
+                                                                .font(.system(size: 10, design: .monospaced))
+                                                                .foregroundColor(.primary)
+                                                                .multilineTextAlignment(.leading)
+                                                                .lineLimit(2)
+                                                            Spacer()
+                                                        }
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            .padding(.top, 4)
+                                        }
+                                        .frame(maxHeight: 150)
+                                    }
+                                    .font(.caption)
+                                } else {
+                                    Text("No text/code files found.")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                }
+                            }
+                            .padding(8)
+                            .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                            .cornerRadius(6)
+                        }
+                    }
+                    
+                    Divider()
+                    
                     // Collapsible Council configurations
                     VStack(alignment: .leading, spacing: 14) {
                         Text("Council Panel Setup")
@@ -82,7 +177,7 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Text("v0.5.0")
+                    Text("v0.7.0")
                         .font(.caption2)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -175,16 +270,32 @@ struct ContentView: View {
                 // Bottom Input Area
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
-                        TextEditor(text: $viewModel.prompt)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(height: 50)
-                            .padding(4)
-                            .background(Color(NSColor.controlBackgroundColor))
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !viewModel.selectedFilePaths.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "paperclip")
+                                        .font(.caption2)
+                                    Text("\(viewModel.selectedFilePaths.count) workspace files attached")
+                                        .font(.system(size: 9, weight: .semibold))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.purple.opacity(0.15))
+                                .foregroundColor(.purple)
+                                .cornerRadius(4)
+                            }
+                            
+                            TextEditor(text: $viewModel.prompt)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(height: 50)
+                                .padding(4)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(6)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                                )
+                        }
                         
                         VStack(spacing: 6) {
                             Button(action: {
@@ -215,7 +326,7 @@ struct ContentView: View {
                 .background(.thinMaterial)
             }
         }
-        .frame(minWidth: 900, minHeight: 700)
+        .frame(minWidth: 950, minHeight: 700)
     }
 }
 

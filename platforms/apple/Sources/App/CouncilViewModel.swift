@@ -40,6 +40,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     // Config values
     @Published var enableCritique: Bool = true
     
+    // Workspace Directory Integration (Milestone 7)
+    @Published var workspacePath: String = ""
+    @Published var scannedFiles: [URL] = []
+    @Published var selectedFilePaths: Set<String> = []
+    
     // Dynamic expert configuration inputs
     @Published var expert1Config = ExpertConfigInput(
         providerType: "Mock Sandbox",
@@ -62,6 +67,12 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     
     init() {
         loadSession()
+        
+        // Load workspace path
+        if let savedPath = UserDefaults.standard.string(forKey: "workspacePath") {
+            self.workspacePath = savedPath
+            refreshFiles()
+        }
     }
     
     // ── Session Storage Helpers ──
@@ -97,6 +108,73 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         chairmanText = ""
         chairmanStatus = "idle"
         chairmanError = nil
+    }
+    
+    // ── Workspace Directory (Milestone 7) ──
+    func selectDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Select Workspace Directory"
+        
+        if panel.runModal() == .OK {
+            if let url = panel.url {
+                DispatchQueue.main.async {
+                    self.workspacePath = url.path
+                    UserDefaults.standard.set(url.path, forKey: "workspacePath")
+                    self.selectedFilePaths.removeAll()
+                    self.refreshFiles()
+                }
+            }
+        }
+    }
+    
+    func refreshFiles() {
+        guard !workspacePath.isEmpty else {
+            self.scannedFiles = []
+            return
+        }
+        
+        let path = workspacePath
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fileManager = FileManager.default
+            let url = URL(fileURLWithPath: path)
+            guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+                DispatchQueue.main.async {
+                    self.scannedFiles = []
+                }
+                return
+            }
+            
+            var files: [URL] = []
+            for case let fileURL as URL in enumerator {
+                do {
+                    let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+                    if resourceValues.isRegularFile ?? false {
+                        let ext = fileURL.pathExtension.lowercased()
+                        let binaryExtensions = ["png", "jpg", "jpeg", "gif", "pdf", "zip", "tar", "gz", "dylib", "a", "so", "exe", "app", "framework", "xcframework", "o", "d", "swiftmodule", "swiftdoc"]
+                        if !binaryExtensions.contains(ext) {
+                            files.append(fileURL)
+                        }
+                    }
+                } catch {
+                    print(error)
+                }
+            }
+            let sorted = files.sorted(by: { $0.path < $1.path })
+            DispatchQueue.main.async {
+                self.scannedFiles = sorted
+            }
+        }
+    }
+    
+    func toggleFileSelection(path: String) {
+        if selectedFilePaths.contains(path) {
+            selectedFilePaths.remove(path)
+        } else {
+            selectedFilePaths.insert(path)
+        }
     }
     
     // ── Drafting Phase Callbacks ──
@@ -323,6 +401,27 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         ]
         
         let currentPrompt = prompt
+        
+        // Format local files context to prepend to prompt
+        var decoratedPrompt = ""
+        var fileAttachmentsList = ""
+        
+        if !selectedFilePaths.isEmpty {
+            decoratedPrompt += "Here are the selected files from the user's local workspace directory for your context:\n\n"
+            var attachedRelativeNames: [String] = []
+            for path in selectedFilePaths {
+                let relativePath = path.replacingOccurrences(of: workspacePath + "/", with: "")
+                attachedRelativeNames.append(relativePath)
+                if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                    decoratedPrompt += "=== File: \(relativePath) ===\n\(content)\n\n"
+                }
+            }
+            decoratedPrompt += "=============================\n\n"
+            fileAttachmentsList = "📎 Attached workspace files: [\(attachedRelativeNames.joined(separator: ", "))]\n\n"
+        }
+        
+        decoratedPrompt += currentPrompt
+        
         let ffiHistory = messages.map { msg in
             FfiMessage(
                 id: msg.id,
@@ -332,11 +431,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             )
         }
         
-        // Append user prompt instantly to display bubble
+        // Append user prompt (with attachment list) to chat log bubble
         let userMsg = CodableMessage(
             id: UUID().uuidString,
             role: "user",
-            content: currentPrompt,
+            content: "\(fileAttachmentsList)\(currentPrompt)",
             timestamp: UInt64(Date().timeIntervalSince1970)
         )
         messages.append(userMsg)
@@ -346,7 +445,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         Task {
             do {
                 _ = try await executeCouncilWorkflow(
-                    prompt: currentPrompt,
+                    prompt: decoratedPrompt,
                     history: ffiHistory,
                     council: council,
                     callback: self
