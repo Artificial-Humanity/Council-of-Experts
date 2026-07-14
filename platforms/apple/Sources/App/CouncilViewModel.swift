@@ -19,13 +19,23 @@ struct ExpertConfigInput {
     var systemPrompt: String
 }
 
+struct CodableMessage: Codable, Identifiable {
+    var id: String
+    var role: String // "user", "assistant"
+    var content: String
+    var timestamp: UInt64
+}
+
 class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var expertStates: [String: ExpertState] = [:]
     @Published var chairmanText: String = ""
     @Published var chairmanStatus: String = "idle" // "idle", "synthesis", "completed", "error"
     @Published var chairmanError: String?
     @Published var isExecuting: Bool = false
-    @Published var prompt: String = "Design a zero-dependency configuration parser in Rust."
+    @Published var prompt: String = ""
+    
+    // Conversation history log
+    @Published var messages: [CodableMessage] = []
     
     // Config values
     @Published var enableCritique: Bool = true
@@ -49,6 +59,45 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         baseUrl: "http://localhost:11434/v1",
         systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and critiques, then synthesize them into a clean, complete response."
     )
+    
+    init() {
+        loadSession()
+    }
+    
+    // ── Session Storage Helpers ──
+    private var sessionURL: URL {
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        let supportDir = paths[0].appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true, attributes: nil)
+        return supportDir.appendingPathComponent("active_session.json")
+    }
+    
+    func saveSession() {
+        do {
+            let data = try JSONEncoder().encode(messages)
+            try data.write(to: sessionURL)
+        } catch {
+            print("Failed to save session: \(error)")
+        }
+    }
+    
+    func loadSession() {
+        do {
+            let data = try Data(contentsOf: sessionURL)
+            let loaded = try JSONDecoder().decode([CodableMessage].self, from: data)
+            self.messages = loaded
+        } catch {
+            print("No active session found or failed to load: \(error)")
+        }
+    }
+    
+    func clearHistory() {
+        messages.removeAll()
+        try? FileManager.default.removeItem(at: sessionURL)
+        chairmanText = ""
+        chairmanStatus = "idle"
+        chairmanError = nil
+    }
     
     // ── Drafting Phase Callbacks ──
     func onExpertStarted(expertId: String) {
@@ -151,6 +200,16 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         DispatchQueue.main.async {
             self.chairmanStatus = "completed"
             self.chairmanText = fullResponse
+            
+            // Append Gaston's finalized synthesized answer to chat log
+            let assistantMsg = CodableMessage(
+                id: UUID().uuidString,
+                role: "assistant",
+                content: fullResponse,
+                timestamp: UInt64(Date().timeIntervalSince1970)
+            )
+            self.messages.append(assistantMsg)
+            self.saveSession()
         }
     }
     
@@ -263,11 +322,32 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             expert2.id: ExpertState(id: expert2.id, name: expert2.name, status: "idle", response: "", critiqueStatus: "idle", critiqueResponse: "")
         ]
         
+        let currentPrompt = prompt
+        let ffiHistory = messages.map { msg in
+            FfiMessage(
+                id: msg.id,
+                role: msg.role == "user" ? .user : .assistant,
+                content: msg.content,
+                timestamp: msg.timestamp
+            )
+        }
+        
+        // Append user prompt instantly to display bubble
+        let userMsg = CodableMessage(
+            id: UUID().uuidString,
+            role: "user",
+            content: currentPrompt,
+            timestamp: UInt64(Date().timeIntervalSince1970)
+        )
+        messages.append(userMsg)
+        saveSession()
+        prompt = "" // clear input box immediately
+        
         Task {
             do {
                 _ = try await executeCouncilWorkflow(
-                    prompt: prompt,
-                    history: [],
+                    prompt: currentPrompt,
+                    history: ffiHistory,
                     council: council,
                     callback: self
                 )
