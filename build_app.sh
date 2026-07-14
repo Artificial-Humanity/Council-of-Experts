@@ -52,4 +52,8 @@ EOF
 chmod +x "$MACOS_DIR/PanelOfExpertsApp"
 
 echo "==> App bundle built successfully: $APP_DIR"
-echo "==> You can launch it using: open $APP_DIR"
+echo "==> Copying app bundle to umbrella project root..."
+rm -rf ../PanelOfExperts.app
+cp -R "$APP_DIR" ../
+echo "==> You can launch it using: open ../$APP_DIR"
+
