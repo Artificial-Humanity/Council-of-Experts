@@ -1,0 +1,11 @@
+# Rust build products
+/target/
+
+# Xcode/SwiftPM build products
+.build/
+.swiftpm/
+build/
+DerivedData/
+
+# OS-level
+.DS_Store

@@ -1,0 +1,16 @@
+[package]
+name = "panel-of-experts-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uniffi = { version = "0.27", features = ["cli"] }
+panel-of-experts-core = { path = "../core" }
+
+[lib]
+name = "panel_of_experts_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
