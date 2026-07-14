@@ -34,37 +34,39 @@ struct ContentView: View {
                     Divider()
                     
                     // API Credentials
-                    DisclosureGroup("Global Credentials") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("OpenAI Key:")
-                                    .font(.caption2)
-                                SecureField("sk-...", text: $viewModel.openAiKey)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Anthropic Key:")
-                                    .font(.caption2)
-                                SecureField("sk-ant-...", text: $viewModel.anthropicKey)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Gemini Key:")
-                                    .font(.caption2)
-                                SecureField("AIzaSy...", text: $viewModel.geminiKey)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Grok (xAI) Key:")
-                                    .font(.caption2)
-                                SecureField("xai-...", text: $viewModel.grokKey)
-                                    .textFieldStyle(.roundedBorder)
-                            }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Global Credentials")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("OpenAI Key:")
+                                .font(.caption2)
+                            SecureField("sk-...", text: $viewModel.openAiKey)
+                                .textFieldStyle(.roundedBorder)
                         }
-                        .padding(.top, 8)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Anthropic Key:")
+                                .font(.caption2)
+                            SecureField("sk-ant-...", text: $viewModel.anthropicKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Gemini Key:")
+                                .font(.caption2)
+                            SecureField("AIzaSy...", text: $viewModel.geminiKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Grok (xAI) Key:")
+                                .font(.caption2)
+                            SecureField("xai-...", text: $viewModel.grokKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
                     .font(.subheadline)
                     
