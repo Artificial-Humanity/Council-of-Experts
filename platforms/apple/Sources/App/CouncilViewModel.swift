@@ -12,6 +12,12 @@ struct ExpertState {
     var error: String?
 }
 
+struct ExpertConfigInput {
+    var providerType: String // "Mock Sandbox", "Anthropic Claude", "OpenAI GPT", "Google Gemini", "Local Ollama/LM Studio"
+    var modelName: String
+    var baseUrl: String
+}
+
 class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var expertStates: [String: ExpertState] = [:]
     @Published var chairmanText: String = ""
@@ -24,8 +30,12 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var openAiKey: String = ""
     @Published var anthropicKey: String = ""
     @Published var geminiKey: String = ""
-    @Published var selectedMode: String = "Mock Sandbox" // "Mock Sandbox", "Live APIs"
     @Published var enableCritique: Bool = true
+    
+    // Dynamic expert configuration inputs
+    @Published var expert1Config = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-expert-1", baseUrl: "http://localhost:11434/v1")
+    @Published var expert2Config = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-expert-2", baseUrl: "http://localhost:11434/v1")
+    @Published var chairmanConfig = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-chairman", baseUrl: "http://localhost:11434/v1")
     
     // ── Drafting Phase Callbacks ──
     func onExpertStarted(expertId: String) {
@@ -138,6 +148,60 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         }
     }
     
+    private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput, systemPrompt: String) -> FfiExpert {
+        let ffiType: FfiProviderType
+        let modelName: String
+        let apiKey: String?
+        let baseUrl: String?
+        
+        switch input.providerType {
+        case "Mock Sandbox":
+            ffiType = .mock
+            modelName = input.modelName.isEmpty ? "mock-model" : input.modelName
+            apiKey = nil
+            baseUrl = nil
+        case "Anthropic Claude":
+            ffiType = .anthropic
+            modelName = input.modelName.isEmpty ? "claude-3-5-sonnet-latest" : input.modelName
+            apiKey = anthropicKey.isEmpty ? nil : anthropicKey
+            baseUrl = nil
+        case "OpenAI GPT":
+            ffiType = .openAi
+            modelName = input.modelName.isEmpty ? "gpt-4o" : input.modelName
+            apiKey = openAiKey.isEmpty ? nil : openAiKey
+            baseUrl = nil
+        case "Google Gemini":
+            ffiType = .gemini
+            modelName = input.modelName.isEmpty ? "gemini-1.5-pro" : input.modelName
+            apiKey = geminiKey.isEmpty ? nil : geminiKey
+            baseUrl = nil
+        case "Local Ollama/LM Studio":
+            ffiType = .localOpenAiCompatible
+            modelName = input.modelName.isEmpty ? "llama3" : input.modelName
+            apiKey = nil
+            baseUrl = input.baseUrl.isEmpty ? "http://localhost:11434/v1" : input.baseUrl
+        default:
+            ffiType = .mock
+            modelName = "mock-model"
+            apiKey = nil
+            baseUrl = nil
+        }
+        
+        return FfiExpert(
+            id: id,
+            name: "\(defaultName) (\(modelName))",
+            config: FfiProviderConfig(
+                name: defaultName,
+                providerType: ffiType,
+                modelName: modelName,
+                baseUrl: baseUrl,
+                apiKey: apiKey,
+                temperature: 0.7
+            ),
+            systemPrompt: systemPrompt
+        )
+    }
+    
     func runCouncil() {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
@@ -146,71 +210,25 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         chairmanStatus = "idle"
         chairmanError = nil
         
-        let mode = selectedMode
-        
-        let modelName1: String
-        let modelName2: String
-        let chairmanModel: String
-        let apiKey1: String?
-        let apiKey2: String?
-        let apiChKey: String?
-        
-        if mode == "Mock Sandbox" {
-            modelName1 = "mock-expert-1"
-            modelName2 = "mock-expert-2"
-            chairmanModel = "mock-chairman"
-            apiKey1 = nil
-            apiKey2 = nil
-            apiChKey = nil
-        } else {
-            modelName1 = "claude-3-5-sonnet-latest"
-            modelName2 = "gpt-4o"
-            chairmanModel = "gemini-1.5-pro"
-            apiKey1 = anthropicKey.isEmpty ? nil : anthropicKey
-            apiKey2 = openAiKey.isEmpty ? nil : openAiKey
-            apiChKey = geminiKey.isEmpty ? nil : geminiKey
-        }
-        
-        let expert1 = FfiExpert(
+        let expert1 = buildFfiExpert(
             id: "expert-claudia",
-            name: "Claudia (Claude)",
-            config: FfiProviderConfig(
-                name: "Anthropic Claude",
-                providerType: mode == "Mock Sandbox" ? .mock : .anthropic,
-                modelName: modelName1,
-                baseUrl: nil,
-                apiKey: apiKey1,
-                temperature: 0.5
-            ),
+            defaultName: "Claudia",
+            input: expert1Config,
             systemPrompt: "You are Claudia, a software developer focusing on type-safety, clean compilation boundaries, and architecture."
         )
         
-        let expert2 = FfiExpert(
+        let expert2 = buildFfiExpert(
             id: "expert-oliver",
-            name: "Oliver (OpenAI)",
-            config: FfiProviderConfig(
-                name: "OpenAI GPT-4o",
-                providerType: mode == "Mock Sandbox" ? .mock : .openAi,
-                modelName: modelName2,
-                baseUrl: nil,
-                apiKey: apiKey2,
-                temperature: 0.7
-            ),
+            defaultName: "Oliver",
+            input: expert2Config,
             systemPrompt: "You are Oliver, a systems programmer focusing on extreme optimizations, memory management, and performance in low-level Rust/C++."
         )
         
-        let chairman = FfiExpert(
+        let chairman = buildFfiExpert(
             id: "chairman-gem",
-            name: "Gaston (Gemini)",
-            config: FfiProviderConfig(
-                name: "Google Gemini Pro",
-                providerType: mode == "Mock Sandbox" ? .mock : .gemini,
-                modelName: chairmanModel,
-                baseUrl: nil,
-                apiKey: apiChKey,
-                temperature: 0.6
-            ),
-            systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and synthesize them into a clean, complete response."
+            defaultName: "Gaston (Chairman)",
+            input: chairmanConfig,
+            systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and critiques, then synthesize them into a clean, complete response."
         )
         
         let council = FfiCouncil(

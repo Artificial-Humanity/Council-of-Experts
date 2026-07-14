@@ -6,80 +6,89 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             // Sidebar controls
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Council Control")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Picker("Execution Mode", selection: $viewModel.selectedMode) {
-                    Text("Mock Sandbox").tag("Mock Sandbox")
-                    Text("Live APIs").tag("Live APIs")
-                }
-                .pickerStyle(.radioGroup)
-                
-                Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
-                    .font(.subheadline)
-                    .padding(.vertical, 4)
-                
-                if viewModel.selectedMode == "Live APIs" {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("API Credentials")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Council Control")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
+                        .font(.subheadline)
+                    
+                    Divider()
+                    
+                    // Collapsible Council configurations
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Council Panel Setup")
                             .font(.subheadline)
                             .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
                         
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("OpenAI Key:")
-                                .font(.caption)
-                            SecureField("sk-...", text: $viewModel.openAiKey)
-                                .textFieldStyle(.roundedBorder)
-                        }
+                        ExpertConfigSection(title: "Expert 1 (Claudia)", config: $viewModel.expert1Config)
                         
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Anthropic Key:")
-                                .font(.caption)
-                            SecureField("sk-ant-...", text: $viewModel.anthropicKey)
-                                .textFieldStyle(.roundedBorder)
-                        }
+                        ExpertConfigSection(title: "Expert 2 (Oliver)", config: $viewModel.expert2Config)
                         
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Gemini Key:")
-                                .font(.caption)
-                            SecureField("AIzaSy...", text: $viewModel.geminiKey)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    .padding()
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(8)
-                }
-                
-                Spacer()
-                
-                // Status panel
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Circle()
-                            .fill(viewModel.isExecuting ? Color.green : Color.gray)
-                            .frame(width: 8, height: 8)
-                            .scaleEffect(viewModel.isExecuting ? 1.2 : 1.0)
-                            .animation(viewModel.isExecuting ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: viewModel.isExecuting)
-                        
-                        Text(viewModel.isExecuting ? "Orchestrating..." : "System Idle")
-                            .font(.caption)
-                            .fontWeight(.medium)
+                        ExpertConfigSection(title: "Chairman (Gaston)", config: $viewModel.chairmanConfig)
                     }
                     
-                    if viewModel.chairmanStatus == "synthesis" {
-                        Text("Synthesizing drafts...")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    Divider()
+                    
+                    // API Credentials
+                    DisclosureGroup("Global Credentials") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("OpenAI Key:")
+                                    .font(.caption2)
+                                SecureField("sk-...", text: $viewModel.openAiKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Anthropic Key:")
+                                    .font(.caption2)
+                                SecureField("sk-ant-...", text: $viewModel.anthropicKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Gemini Key:")
+                                    .font(.caption2)
+                                SecureField("AIzaSy...", text: $viewModel.geminiKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                        }
+                        .padding(.top, 8)
                     }
+                    .font(.subheadline)
+                    
+                    Spacer()
+                    
+                    // Status panel
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Circle()
+                                .fill(viewModel.isExecuting ? Color.green : Color.gray)
+                                .frame(width: 8, height: 8)
+                                .scaleEffect(viewModel.isExecuting ? 1.2 : 1.0)
+                                .animation(viewModel.isExecuting ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: viewModel.isExecuting)
+                            
+                            Text(viewModel.isExecuting ? "Orchestrating..." : "System Idle")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        
+                        if viewModel.chairmanStatus == "synthesis" {
+                            Text("Synthesizing drafts...")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.top, 10)
                 }
-                .padding(.bottom, 10)
+                .padding()
             }
-            .padding()
-            .frame(minWidth: 220)
-            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+            .frame(minWidth: 240)
+            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
             
         } detail: {
             // Main Content Dashboard
@@ -98,7 +107,7 @@ struct ContentView: View {
                                     )
                                 )
                             Spacer()
-                            Text("v0.2.0")
+                            Text("v0.3.0")
                                 .font(.caption)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
@@ -175,7 +184,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
                                 Image(systemName: "crown.fill")
-                                    .foregroundColor(.amber)
+                                    .foregroundColor(Color.amber)
                                 Text("Gaston (Chairman Synthesis)")
                                     .font(.headline)
                                 Spacer()
@@ -225,6 +234,46 @@ struct ContentView: View {
             .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
         }
         .frame(minWidth: 800, minHeight: 600)
+    }
+}
+
+struct ExpertConfigSection: View {
+    let title: String
+    @Binding var config: ExpertConfigInput
+    
+    var body: some View {
+        DisclosureGroup(title) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Provider", selection: $config.providerType) {
+                    Text("Mock Sandbox").tag("Mock Sandbox")
+                    Text("Anthropic Claude").tag("Anthropic Claude")
+                    Text("OpenAI GPT").tag("OpenAI GPT")
+                    Text("Google Gemini").tag("Google Gemini")
+                    Text("Local Model").tag("Local Ollama/LM Studio")
+                }
+                .pickerStyle(.menu)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Model Name:")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    TextField("e.g. llama3", text: $config.modelName)
+                        .textFieldStyle(.roundedBorder)
+                }
+                
+                if config.providerType == "Local Ollama/LM Studio" {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Base URL:")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        TextField("http://localhost:11434/v1", text: $config.baseUrl)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+        }
     }
 }
 
@@ -351,4 +400,3 @@ struct StatusBadge: View {
 extension Color {
     static let amber = Color(red: 1.0, green: 0.75, blue: 0.0)
 }
-
