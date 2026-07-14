@@ -56,6 +56,13 @@ struct ContentView: View {
                                 SecureField("AIzaSy...", text: $viewModel.geminiKey)
                                     .textFieldStyle(.roundedBorder)
                             }
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Grok (xAI) Key:")
+                                    .font(.caption2)
+                                SecureField("xai-...", text: $viewModel.grokKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
                         }
                         .padding(.top, 8)
                     }
@@ -249,6 +256,7 @@ struct ExpertConfigSection: View {
                     Text("Anthropic Claude").tag("Anthropic Claude")
                     Text("OpenAI GPT").tag("OpenAI GPT")
                     Text("Google Gemini").tag("Google Gemini")
+                    Text("xAI Grok").tag("xAI Grok")
                     Text("Local Model").tag("Local Ollama/LM Studio")
                 }
                 .pickerStyle(.menu)

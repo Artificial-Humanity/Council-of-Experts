@@ -30,6 +30,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var openAiKey: String = ""
     @Published var anthropicKey: String = ""
     @Published var geminiKey: String = ""
+    @Published var grokKey: String = ""
     @Published var enableCritique: Bool = true
     
     // Dynamic expert configuration inputs
@@ -174,6 +175,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             ffiType = .gemini
             modelName = input.modelName.isEmpty ? "gemini-1.5-pro" : input.modelName
             apiKey = geminiKey.isEmpty ? nil : geminiKey
+            baseUrl = nil
+        case "xAI Grok":
+            ffiType = .grok
+            modelName = input.modelName.isEmpty ? "grok-2" : input.modelName
+            apiKey = grokKey.isEmpty ? nil : grokKey
             baseUrl = nil
         case "Local Ollama/LM Studio":
             ffiType = .localOpenAiCompatible

@@ -137,7 +137,11 @@ impl OpenAiCompatibleClient {
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiCompatibleClient {
     async fn generate(&self, prompt: &str, history: &[Message], expert: &Expert) -> Result<String, PanelError> {
-        let base_url = expert.config.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let default_url = match expert.config.provider_type {
+            ProviderType::Grok => "https://api.x.ai/v1".to_string(),
+            _ => "https://api.openai.com/v1".to_string(),
+        };
+        let base_url = expert.config.base_url.clone().unwrap_or(default_url);
         let url = format!("{}/chat/completions", base_url);
         
         let mut headers = HeaderMap::new();
@@ -204,7 +208,11 @@ impl LlmProvider for OpenAiCompatibleClient {
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
-        let base_url = expert.config.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let default_url = match expert.config.provider_type {
+            ProviderType::Grok => "https://api.x.ai/v1".to_string(),
+            _ => "https://api.openai.com/v1".to_string(),
+        };
+        let base_url = expert.config.base_url.clone().unwrap_or(default_url);
         let url = format!("{}/chat/completions", base_url);
         
         let mut headers = HeaderMap::new();
