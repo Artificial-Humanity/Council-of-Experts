@@ -17,6 +17,10 @@ struct ContentView: View {
                 }
                 .pickerStyle(.radioGroup)
                 
+                Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
+                    .font(.subheadline)
+                    .padding(.vertical, 4)
+                
                 if viewModel.selectedMode == "Live APIs" {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("API Credentials")
@@ -94,14 +98,14 @@ struct ContentView: View {
                                     )
                                 )
                             Spacer()
-                            Text("v0.1.0")
+                            Text("v0.2.0")
                                 .font(.caption)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(Color.blue.opacity(0.15))
                                 .cornerRadius(8)
                         }
-                        Text("A multi-agent consensus network synthesizing concurrent draft responses in real-time.")
+                        Text("A multi-agent consensus network synthesizing concurrent draft responses and critiques in real-time.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -226,6 +230,7 @@ struct ContentView: View {
 
 struct ExpertCardView: View {
     let state: ExpertState
+    @State private var selectedTab = 0
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -236,26 +241,65 @@ struct ExpertCardView: View {
                 Spacer()
                 
                 // Status badge
-                StatusBadge(status: state.status)
+                StatusBadge(status: currentPhaseStatus)
+            }
+            
+            // Tab Selector
+            Picker("", selection: $selectedTab) {
+                Text("Draft 1").tag(0)
+                HStack(spacing: 4) {
+                    Text("Critique")
+                    if state.critiqueStatus == "drafting" {
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 4, height: 4)
+                    }
+                }.tag(1)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: state.critiqueStatus) { _, newValue in
+                if newValue == "drafting" {
+                    selectedTab = 1
+                }
             }
             
             Divider()
             
             ScrollView {
-                if let err = state.error {
-                    Text("Error: \(err)")
-                        .foregroundColor(.red)
-                        .font(.caption)
-                } else if state.response.isEmpty {
-                    Text(state.status == "drafting" ? "Initiating draft stream..." : "Idle. Awaiting launch...")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                        .italic()
+                if selectedTab == 0 {
+                    // Display Initial Draft
+                    if let err = state.error, state.status == "error" {
+                        Text("Draft Error: \(err)")
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    } else if state.response.isEmpty {
+                        Text(state.status == "drafting" ? "Initiating draft stream..." : "Awaiting user query...")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .italic()
+                    } else {
+                        Text(state.response)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
                 } else {
-                    Text(state.response)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    // Display Critique & Revision
+                    if let err = state.error, state.critiqueStatus == "error" {
+                        Text("Critique Error: \(err)")
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    } else if state.critiqueResponse.isEmpty {
+                        Text(state.critiqueStatus == "drafting" ? "Streaming critiques..." : "Awaiting initial drafts...")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .italic()
+                    } else {
+                        Text(state.critiqueResponse)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
                 }
             }
             .frame(height: 150)
@@ -265,8 +309,19 @@ struct ExpertCardView: View {
         .cornerRadius(10)
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(state.status == "drafting" ? Color.blue.opacity(0.5) : Color.secondary.opacity(0.1), lineWidth: 1)
+                .stroke(isStreaming ? Color.blue.opacity(0.5) : Color.secondary.opacity(0.1), lineWidth: 1)
         )
+    }
+    
+    private var currentPhaseStatus: String {
+        if state.critiqueStatus != "idle" {
+            return state.critiqueStatus == "drafting" ? "critiquing" : state.critiqueStatus
+        }
+        return state.status
+    }
+    
+    private var isStreaming: Bool {
+        state.status == "drafting" || state.critiqueStatus == "drafting"
     }
 }
 
@@ -285,7 +340,7 @@ struct StatusBadge: View {
     
     private var badgeColor: Color {
         switch status {
-        case "drafting": return .blue
+        case "drafting", "critiquing": return .blue
         case "completed": return .green
         case "error": return .red
         default: return .gray
@@ -296,3 +351,4 @@ struct StatusBadge: View {
 extension Color {
     static let amber = Color(red: 1.0, green: 0.75, blue: 0.0)
 }
+

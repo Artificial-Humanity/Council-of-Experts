@@ -7,6 +7,8 @@ struct ExpertState {
     var name: String
     var status: String // "idle", "drafting", "completed", "error"
     var response: String
+    var critiqueStatus: String // "idle", "drafting", "completed", "error"
+    var critiqueResponse: String
     var error: String?
 }
 
@@ -23,7 +25,9 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var anthropicKey: String = ""
     @Published var geminiKey: String = ""
     @Published var selectedMode: String = "Mock Sandbox" // "Mock Sandbox", "Live APIs"
+    @Published var enableCritique: Bool = true
     
+    // ── Drafting Phase Callbacks ──
     func onExpertStarted(expertId: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
@@ -64,6 +68,48 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         }
     }
     
+    // ── Critique Phase Callbacks ──
+    func onExpertCritiqueStarted(expertId: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.critiqueStatus = "drafting"
+                state.critiqueResponse = ""
+                state.error = nil
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+    
+    func onExpertCritiqueChunk(expertId: String, chunk: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.critiqueResponse += chunk
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+    
+    func onExpertCritiqueCompleted(expertId: String, fullCritique: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.critiqueStatus = "completed"
+                state.critiqueResponse = fullCritique
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+    
+    func onExpertCritiqueError(expertId: String, error: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.critiqueStatus = "error"
+                state.error = error
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+    
+    // ── Chairman Synthesis Callbacks ──
     func onChairmanStarted() {
         DispatchQueue.main.async {
             self.chairmanStatus = "synthesis"
@@ -171,12 +217,13 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             id: "panel-development",
             name: "Software Architecture Council",
             experts: [expert1, expert2],
-            chairman: chairman
+            chairman: chairman,
+            critiqueRounds: enableCritique ? 1 : 0
         )
         
         self.expertStates = [
-            expert1.id: ExpertState(id: expert1.id, name: expert1.name, status: "idle", response: ""),
-            expert2.id: ExpertState(id: expert2.id, name: expert2.name, status: "idle", response: "")
+            expert1.id: ExpertState(id: expert1.id, name: expert1.name, status: "idle", response: "", critiqueStatus: "idle", critiqueResponse: ""),
+            expert2.id: ExpertState(id: expert2.id, name: expert2.name, status: "idle", response: "", critiqueStatus: "idle", critiqueResponse: "")
         ]
         
         Task {

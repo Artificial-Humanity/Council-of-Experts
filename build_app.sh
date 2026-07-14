@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "==> Re-building Rust FFI components and framework..."
+./build_frameworks.sh
+
 echo "==> Building Panel of Experts SwiftUI App (Release)..."
 swift build --package-path platforms/apple -c release --product PanelOfExpertsApp
 

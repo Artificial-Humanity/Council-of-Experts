@@ -75,6 +75,7 @@ pub struct Council {
     pub name: String,
     pub experts: Vec<Expert>,
     pub chairman: Expert,
+    pub critique_rounds: u32,
 }
 
 pub trait StreamCallback: Send + Sync {
@@ -87,6 +88,12 @@ pub trait CouncilCallback: Send + Sync {
     fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
     fn on_expert_completed(&self, expert_id: &str, full_response: &str);
     fn on_expert_error(&self, expert_id: &str, error: &str);
+    
+    fn on_expert_critique_started(&self, expert_id: &str);
+    fn on_expert_critique_chunk(&self, expert_id: &str, chunk: &str);
+    fn on_expert_critique_completed(&self, expert_id: &str, full_critique: &str);
+    fn on_expert_critique_error(&self, expert_id: &str, error: &str);
+
     fn on_chairman_started(&self);
     fn on_chairman_chunk(&self, chunk: &str);
     fn on_chairman_completed(&self, full_response: &str);
@@ -640,12 +647,16 @@ impl LlmProvider for MockProvider {
 
     async fn generate_stream(
         &self,
-        _prompt: &str,
+        prompt: &str,
         _history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
-        callback.on_chunk(&format!("Mock chunk from {}", expert.name));
+        if prompt.contains("Other panel experts have generated") {
+            callback.on_chunk(&format!("Mock critique and revised draft from {}", expert.name));
+        } else {
+            callback.on_chunk(&format!("Mock initial draft from {}", expert.name));
+        }
         Ok(())
     }
 }
@@ -669,6 +680,7 @@ pub async fn run_council_flow(
     council: &Council,
     callback: Arc<dyn CouncilCallback + 'static>,
 ) -> Result<String, PanelError> {
+    // 1. Initial Drafting Phase
     let mut draft_handles = Vec::new();
     
     for expert in &council.experts {
@@ -731,30 +743,131 @@ pub async fn run_council_flow(
                 expert_drafts.push((expert_id, response));
             }
             Ok(Err(e)) => {
-                eprintln!("Expert execution error: {:?}", e);
+                eprintln!("Expert draft error: {:?}", e);
             }
             Err(e) => {
                 eprintln!("Tokio task join error: {:?}", e);
             }
         }
     }
+
+    // 2. Parallel Critique Phase
+    let mut final_expert_drafts = expert_drafts.clone();
+    let mut expert_critiques = Vec::new();
+
+    if council.critique_rounds > 0 {
+        let mut critique_handles = Vec::new();
+        
+        for expert in &council.experts {
+            let expert = expert.clone();
+            let prompt = prompt.to_string();
+            let history = history.to_vec();
+            let cb = callback.clone();
+            
+            let other_drafts_str = expert_drafts.iter()
+                .filter(|(id, _)| id != &expert.id)
+                .map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            
+            let critique_prompt = format!(
+                "You are an expert panelist. Here is the original user query: \"{}\"\n\nOther panel experts have generated the following initial drafts:\n\n{}\n\nPlease critique the other drafts, highlighting omissions, errors, or improvements, and then output your updated and final revised response in a cohesive manner.",
+                prompt,
+                other_drafts_str
+            );
+
+            let handle = RUNTIME.spawn(async move {
+                cb.on_expert_critique_started(&expert.id);
+                
+                struct CritiqueStreamProxy {
+                    expert_id: String,
+                    cb: Arc<dyn CouncilCallback + 'static>,
+                    full_text: Mutex<String>,
+                }
+                
+                impl StreamCallback for CritiqueStreamProxy {
+                    fn on_chunk(&self, chunk: &str) {
+                        self.cb.on_expert_critique_chunk(&self.expert_id, chunk);
+                        if let Ok(mut text) = self.full_text.lock() {
+                            text.push_str(chunk);
+                        }
+                    }
+                    fn on_error(&self, error: &str) {
+                        self.cb.on_expert_critique_error(&self.expert_id, error);
+                    }
+                }
+                
+                let proxy = CritiqueStreamProxy {
+                    expert_id: expert.id.clone(),
+                    cb: cb.clone(),
+                    full_text: Mutex::new(String::new()),
+                };
+                
+                let provider = get_provider(&expert.config.provider_type);
+                match provider.generate_stream(&critique_prompt, &history, &expert, &proxy).await {
+                    Ok(_) => {
+                        let full_response = {
+                            let text_lock = proxy.full_text.lock().unwrap();
+                            text_lock.clone()
+                        };
+                        cb.on_expert_critique_completed(&expert.id, &full_response);
+                        Ok((expert.id.clone(), full_response))
+                    }
+                    Err(e) => {
+                        cb.on_expert_critique_error(&expert.id, &e.to_string());
+                        Err(e)
+                    }
+                }
+            });
+            critique_handles.push(handle);
+        }
+
+        let mut revised_drafts = Vec::new();
+        for handle in critique_handles {
+            match handle.await {
+                Ok(Ok((expert_id, response))) => {
+                    revised_drafts.push((expert_id.clone(), response.clone()));
+                    expert_critiques.push((expert_id, response));
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Expert critique error: {:?}", e);
+                }
+                Err(e) => {
+                    eprintln!("Tokio task join error: {:?}", e);
+                }
+            }
+        }
+        if !revised_drafts.is_empty() {
+            final_expert_drafts = revised_drafts;
+        }
+    }
     
+    // 3. Chairman Synthesis Phase
     callback.on_chairman_started();
     
     let mut compiled_history = history.to_vec();
-    for (expert_id, draft) in &expert_drafts {
+    for (expert_id, draft) in &final_expert_drafts {
         compiled_history.push(Message {
-            id: format!("msg_draft_{}", expert_id),
+            id: format!("msg_revised_draft_{}", expert_id),
             role: Role::ExpertDraft { expert_id: expert_id.clone() },
             content: draft.clone(),
             timestamp: 0,
         });
     }
+
+    for (expert_id, critique) in &expert_critiques {
+        compiled_history.push(Message {
+            id: format!("msg_critique_{}", expert_id),
+            role: Role::ExpertCritique { expert_id: expert_id.clone() },
+            content: critique.clone(),
+            timestamp: 0,
+        });
+    }
     
     let synthesis_prompt = format!(
-        "The user query is: \"{}\"\n\nHere are the drafts generated by the active expert council:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
+        "The original user query is: \"{}\"\n\nHere are the final revised drafts and critiques generated by the active expert council:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
         prompt,
-        expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n")
+        final_expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n")
     );
     
     struct ChairmanStreamProxy {
@@ -803,6 +916,8 @@ mod tests {
     struct MockCouncilCallback {
         started_experts: Arc<Mutex<Vec<String>>>,
         completed_experts: Arc<Mutex<Vec<String>>>,
+        started_critiques: Arc<Mutex<Vec<String>>>,
+        completed_critiques: Arc<Mutex<Vec<String>>>,
         chunks: Arc<Mutex<Vec<String>>>,
     }
 
@@ -817,6 +932,18 @@ mod tests {
             self.completed_experts.lock().unwrap().push(expert_id.to_string());
         }
         fn on_expert_error(&self, _expert_id: &str, _error: &str) {}
+
+        fn on_expert_critique_started(&self, expert_id: &str) {
+            self.started_critiques.lock().unwrap().push(expert_id.to_string());
+        }
+        fn on_expert_critique_chunk(&self, _expert_id: &str, chunk: &str) {
+            self.chunks.lock().unwrap().push(chunk.to_string());
+        }
+        fn on_expert_critique_completed(&self, expert_id: &str, _full_critique: &str) {
+            self.completed_critiques.lock().unwrap().push(expert_id.to_string());
+        }
+        fn on_expert_critique_error(&self, _expert_id: &str, _error: &str) {}
+
         fn on_chairman_started(&self) {}
         fn on_chairman_chunk(&self, chunk: &str) {
             self.chunks.lock().unwrap().push(chunk.to_string());
@@ -874,11 +1001,14 @@ mod tests {
                 config: mock_config.clone(),
                 system_prompt: "you are the chairman".to_string(),
             },
+            critique_rounds: 1,
         };
 
         let callback = Arc::new(MockCouncilCallback {
             started_experts: Arc::new(Mutex::new(Vec::new())),
             completed_experts: Arc::new(Mutex::new(Vec::new())),
+            started_critiques: Arc::new(Mutex::new(Vec::new())),
+            completed_critiques: Arc::new(Mutex::new(Vec::new())),
             chunks: Arc::new(Mutex::new(Vec::new())),
         });
 
@@ -887,9 +1017,14 @@ mod tests {
         
         let started = callback.started_experts.lock().unwrap();
         let completed = callback.completed_experts.lock().unwrap();
+        let started_crit = callback.started_critiques.lock().unwrap();
+        let completed_crit = callback.completed_critiques.lock().unwrap();
+        
         assert_eq!(started.len(), 2);
         assert_eq!(completed.len(), 2);
+        assert_eq!(started_crit.len(), 2);
+        assert_eq!(completed_crit.len(), 2);
         assert!(started.contains(&"expert-1".to_string()));
-        assert!(started.contains(&"expert-2".to_string()));
+        assert!(started_crit.contains(&"expert-2".to_string()));
     }
 }
