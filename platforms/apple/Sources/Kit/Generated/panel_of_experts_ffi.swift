@@ -753,6 +753,84 @@ public func FfiConverterTypeFfiProviderConfig_lower(_ value: FfiProviderConfig) 
     return FfiConverterTypeFfiProviderConfig.lower(value)
 }
 
+
+public enum FfiPanelError {
+
+    
+    
+    case ApiError(message: String
+    )
+    case SerializationError(message: String
+    )
+    case ConfigError(message: String
+    )
+    case Unknown(message: String
+    )
+}
+
+
+public struct FfiConverterTypeFfiPanelError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPanelError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPanelError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .ApiError(
+            message: try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .SerializationError(
+            message: try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .ConfigError(
+            message: try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .Unknown(
+            message: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiPanelError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .ApiError(message):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .SerializationError(message):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .ConfigError(message):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .Unknown(message):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(message, into: &buf)
+            
+        }
+    }
+}
+
+
+extension FfiPanelError: Equatable, Hashable {}
+
+extension FfiPanelError: Error { }
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -911,6 +989,143 @@ extension FfiRole: Equatable, Hashable {}
 
 
 
+
+
+
+public protocol FfiStreamCallback : AnyObject {
+    
+    func onChunk(chunk: String) 
+    
+    func onComplete() 
+    
+    func onError(error: String) 
+    
+}
+
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiStreamCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceFfiStreamCallback = UniffiVTableCallbackInterfaceFfiStreamCallback(
+        onChunk: { (
+            uniffiHandle: UInt64,
+            chunk: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiStreamCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChunk(
+                     chunk: try FfiConverterString.lift(chunk)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onComplete: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiStreamCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onComplete(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onError: { (
+            uniffiHandle: UInt64,
+            error: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiStreamCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onError(
+                     error: try FfiConverterString.lift(error)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceFfiStreamCallback.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface FfiStreamCallback: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitFfiStreamCallback() {
+    uniffi_panel_of_experts_ffi_fn_init_callback_vtable_ffistreamcallback(&UniffiCallbackInterfaceFfiStreamCallback.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+fileprivate struct FfiConverterCallbackInterfaceFfiStreamCallback {
+    fileprivate static var handleMap = UniffiHandleMap<FfiStreamCallback>()
+}
+
+extension FfiConverterCallbackInterfaceFfiStreamCallback : FfiConverter {
+    typealias SwiftType = FfiStreamCallback
+    typealias FfiType = UInt64
+
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
 fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
     typealias SwiftType = Float?
 
@@ -974,6 +1189,102 @@ fileprivate struct FfiConverterSequenceTypeFfiExpert: FfiConverterRustBuffer {
         return seq
     }
 }
+
+fileprivate struct FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMessage]
+
+    public static func write(_ value: [FfiMessage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMessage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMessage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMessage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMessage.read(from: &buf))
+        }
+        return seq
+    }
+}
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Error)?
+) async throws -> T {
+    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                uniffiFutureContinuationCallback,
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
+public func generateExpertResponse(prompt: String, history: [FfiMessage], expert: FfiExpert)async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_panel_of_experts_ffi_fn_func_generate_expert_response(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert)
+                )
+            },
+            pollFunc: ffi_panel_of_experts_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_panel_of_experts_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_panel_of_experts_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFfiPanelError.lift
+        )
+}
+public func generateExpertStream(prompt: String, history: [FfiMessage], expert: FfiExpert, callback: FfiStreamCallback)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_panel_of_experts_ffi_fn_func_generate_expert_stream(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert),FfiConverterCallbackInterfaceFfiStreamCallback.lower(callback)
+                )
+            },
+            pollFunc: ffi_panel_of_experts_ffi_rust_future_poll_void,
+            completeFunc: ffi_panel_of_experts_ffi_rust_future_complete_void,
+            freeFunc: ffi_panel_of_experts_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiPanelError.lift
+        )
+}
 public func verifyFfiBridge() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_panel_of_experts_ffi_fn_func_verify_ffi_bridge($0
@@ -996,10 +1307,26 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_panel_of_experts_ffi_checksum_func_generate_expert_response() != 16015) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_func_generate_expert_stream() != 57649) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_panel_of_experts_ffi_checksum_func_verify_ffi_bridge() != 35799) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_panel_of_experts_ffi_checksum_method_ffistreamcallback_on_chunk() != 22332) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_ffistreamcallback_on_complete() != 45952) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_ffistreamcallback_on_error() != 33117) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
+    uniffiCallbackInitFfiStreamCallback()
     return InitializationResult.ok
 }
 

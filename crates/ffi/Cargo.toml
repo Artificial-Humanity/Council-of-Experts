@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 uniffi = { version = "0.27", features = ["cli"] }
 panel-of-experts-core = { path = "../core" }
+thiserror = "1.0"
 
 [lib]
 name = "panel_of_experts_ffi"
