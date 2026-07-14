@@ -21,6 +21,16 @@ struct ContentView: View {
                         .help("Open Settings")
                     }
                     
+                    // Stepper for Active Experts Count (Limit 8)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Stepper("Active Experts: \(viewModel.activeExpertCount)", value: $viewModel.activeExpertCount, in: 1...8)
+                            .font(.subheadline)
+                        
+                        Text("Limit: 1 - 8 panel members")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                    
                     Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
                         .font(.subheadline)
                     
@@ -128,11 +138,18 @@ struct ContentView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.secondary)
                         
-                        ExpertConfigSection(title: "Expert 1 (Claudia)", config: $viewModel.expert1Config)
+                        // Dynamically list settings only for active experts
+                        ForEach(0..<viewModel.activeExpertCount, id: \.self) { idx in
+                            ExpertConfigSection(
+                                title: "Expert \(idx + 1) (\(viewModel.expertsConfig[idx].name))",
+                                config: $viewModel.expertsConfig[idx]
+                            )
+                        }
                         
-                        ExpertConfigSection(title: "Expert 2 (Oliver)", config: $viewModel.expert2Config)
-                        
-                        ExpertConfigSection(title: "Chairman (Gaston)", config: $viewModel.chairmanConfig)
+                        ExpertConfigSection(
+                            title: "Chairman (\(viewModel.chairmanConfig.name))",
+                            config: $viewModel.chairmanConfig
+                        )
                     }
                     
                     Spacer()
@@ -177,7 +194,7 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Text("v0.7.0")
+                    Text("v0.7.5")
                         .font(.caption2)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -255,13 +272,32 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .padding(.top, 8)
                     
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        ForEach(Array(viewModel.expertStates.values.sorted(by: { $0.id < $1.id })), id: \.id) { state in
-                            ExpertCardView(state: state)
+                    // Arrange columns dynamically (max 2 columns wide)
+                    let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: min(viewModel.activeExpertCount, 2))
+                    
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 10) {
+                            ForEach(1...viewModel.activeExpertCount, id: \.self) { idx in
+                                let expertId = "expert-\(idx)"
+                                if let state = viewModel.expertStates[expertId] {
+                                    ExpertCardView(state: state)
+                                } else {
+                                    let config = viewModel.expertsConfig[idx - 1]
+                                    ExpertCardView(state: ExpertState(
+                                        id: expertId,
+                                        name: "\(config.name) (\(config.modelName.isEmpty ? "mock" : config.modelName))",
+                                        status: "idle",
+                                        response: "",
+                                        critiqueStatus: "idle",
+                                        critiqueResponse: ""
+                                    ))
+                                }
+                            }
                         }
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                    .frame(maxHeight: viewModel.activeExpertCount > 2 ? 180 : 110)
                 }
                 .background(.thinMaterial)
                 
@@ -337,6 +373,15 @@ struct ExpertConfigSection: View {
     var body: some View {
         DisclosureGroup(title) {
             VStack(alignment: .leading, spacing: 8) {
+                // Configurable Custom Name field
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Name:")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    TextField("e.g. Claudia", text: $config.name)
+                        .textFieldStyle(.roundedBorder)
+                }
+                
                 Picker("Provider", selection: $config.providerType) {
                     Text("Mock Sandbox").tag("Mock Sandbox")
                     Text("Anthropic Claude").tag("Anthropic Claude")
@@ -475,6 +520,7 @@ struct ExpertCardView: View {
                 Text(state.name)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.primary)
+                    .lineLimit(1)
                 Spacer()
                 
                 // Status badge

@@ -13,6 +13,7 @@ struct ExpertState {
 }
 
 struct ExpertConfigInput {
+    var name: String
     var providerType: String // "Mock Sandbox", "Anthropic Claude", "OpenAI GPT", "Google Gemini", "Local Ollama/LM Studio"
     var modelName: String
     var baseUrl: String
@@ -45,20 +46,74 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var scannedFiles: [URL] = []
     @Published var selectedFilePaths: Set<String> = []
     
-    // Dynamic expert configuration inputs
-    @Published var expert1Config = ExpertConfigInput(
-        providerType: "Mock Sandbox",
-        modelName: "mock-expert-1",
-        baseUrl: "http://localhost:11434/v1",
-        systemPrompt: "You are Claudia, a software developer focusing on type-safety, clean compilation boundaries, and architecture."
-    )
-    @Published var expert2Config = ExpertConfigInput(
-        providerType: "Mock Sandbox",
-        modelName: "mock-expert-2",
-        baseUrl: "http://localhost:11434/v1",
-        systemPrompt: "You are Oliver, a systems programmer focusing on extreme optimizations, memory management, and performance in low-level Rust/C++."
-    )
+    // Dynamic expert configuration settings (Limit of 8 active experts)
+    @Published var activeExpertCount: Int = 2 {
+        didSet {
+            UserDefaults.standard.set(activeExpertCount, forKey: "activeExpertCount")
+        }
+    }
+    
+    @Published var expertsConfig: [ExpertConfigInput] = [
+        ExpertConfigInput(
+            name: "Claudia",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-1",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Claudia, a software developer focusing on type-safety, clean compilation boundaries, and architecture."
+        ),
+        ExpertConfigInput(
+            name: "Oliver",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-2",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Oliver, a systems programmer focusing on extreme optimizations, memory management, and performance in low-level Rust/C++."
+        ),
+        ExpertConfigInput(
+            name: "Sarah",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-3",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Sarah, a product manager & UX designer focusing on user-centered design, workflows, and accessibility."
+        ),
+        ExpertConfigInput(
+            name: "David",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-4",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are David, a security auditor focusing on vulnerability analysis, threat modeling, and cryptographic best practices."
+        ),
+        ExpertConfigInput(
+            name: "Elena",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-5",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Elena, a DevOps specialist focusing on build pipelines, deployment configurations, and containerization."
+        ),
+        ExpertConfigInput(
+            name: "Marcus",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-6",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Marcus, a database engineer focusing on schema design, query optimization, and transaction safety."
+        ),
+        ExpertConfigInput(
+            name: "Chloe",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-7",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Chloe, a technical writer focusing on clean documentation, API usability, and code readability."
+        ),
+        ExpertConfigInput(
+            name: "Yuki",
+            providerType: "Mock Sandbox",
+            modelName: "mock-expert-8",
+            baseUrl: "http://localhost:11434/v1",
+            systemPrompt: "You are Yuki, a quality assurance engineer focusing on edge cases, unit test coverage, and regression prevention."
+        )
+    ]
+    
     @Published var chairmanConfig = ExpertConfigInput(
+        name: "Gaston (Chairman)",
         providerType: "Mock Sandbox",
         modelName: "mock-chairman",
         baseUrl: "http://localhost:11434/v1",
@@ -67,6 +122,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     
     init() {
         loadSession()
+        
+        // Load active expert count
+        if let savedCount = UserDefaults.standard.object(forKey: "activeExpertCount") as? Int {
+            self.activeExpertCount = savedCount
+        }
         
         // Load workspace path
         if let savedPath = UserDefaults.standard.string(forKey: "workspacePath") {
@@ -369,36 +429,44 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         chairmanStatus = "idle"
         chairmanError = nil
         
-        let expert1 = buildFfiExpert(
-            id: "expert-claudia",
-            defaultName: "Claudia",
-            input: expert1Config
-        )
+        // Dynamically build active FfiExperts based on activeExpertCount
+        var activeExperts: [FfiExpert] = []
+        self.expertStates.removeAll()
         
-        let expert2 = buildFfiExpert(
-            id: "expert-oliver",
-            defaultName: "Oliver",
-            input: expert2Config
-        )
+        for i in 0..<activeExpertCount {
+            let config = expertsConfig[i]
+            let expertId = "expert-\(i + 1)"
+            let ffiExpert = buildFfiExpert(
+                id: expertId,
+                defaultName: config.name.isEmpty ? "Expert \(i + 1)" : config.name,
+                input: config
+            )
+            activeExperts.append(ffiExpert)
+            
+            // Initialize states
+            self.expertStates[expertId] = ExpertState(
+                id: expertId,
+                name: ffiExpert.name,
+                status: "idle",
+                response: "",
+                critiqueStatus: "idle",
+                critiqueResponse: ""
+            )
+        }
         
         let chairman = buildFfiExpert(
             id: "chairman-gem",
-            defaultName: "Gaston (Chairman)",
+            defaultName: chairmanConfig.name.isEmpty ? "Chairman Gaston" : chairmanConfig.name,
             input: chairmanConfig
         )
         
         let council = FfiCouncil(
             id: "panel-development",
             name: "Software Architecture Council",
-            experts: [expert1, expert2],
+            experts: activeExperts,
             chairman: chairman,
             critiqueRounds: enableCritique ? 1 : 0
         )
-        
-        self.expertStates = [
-            expert1.id: ExpertState(id: expert1.id, name: expert1.name, status: "idle", response: "", critiqueStatus: "idle", critiqueResponse: ""),
-            expert2.id: ExpertState(id: expert2.id, name: expert2.name, status: "idle", response: "", critiqueStatus: "idle", critiqueResponse: "")
-        ]
         
         let currentPrompt = prompt
         
