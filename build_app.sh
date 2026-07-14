@@ -52,7 +52,4 @@ EOF
 chmod +x "$MACOS_DIR/CouncilOfExpertsApp"
 
 echo "==> App bundle built successfully: $APP_DIR"
-echo "==> Copying app bundle to umbrella project root..."
-rm -rf ../CouncilOfExperts.app
-cp -R "$APP_DIR" ../
-echo "==> You can launch it using: open ../$APP_DIR"
+echo "==> You can launch it using: open $APP_DIR"
