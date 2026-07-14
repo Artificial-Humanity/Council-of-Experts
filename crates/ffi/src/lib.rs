@@ -50,6 +50,13 @@ pub struct FfiMessage {
 }
 
 #[derive(uniffi::Record)]
+pub struct FfiAttachment {
+    pub file_path: String,
+    pub mime_type: String,
+    pub base64_data: String,
+}
+
+#[derive(uniffi::Record)]
 pub struct FfiCouncil {
     pub id: String,
     pub name: String,
@@ -216,6 +223,14 @@ fn map_council(c: FfiCouncil) -> core::Council {
     }
 }
 
+fn map_attachment(a: FfiAttachment) -> core::Attachment {
+    core::Attachment {
+        file_path: a.file_path,
+        mime_type: a.mime_type,
+        base64_data: a.base64_data,
+    }
+}
+
 fn map_error(e: core::PanelError) -> FfiPanelError {
     match e {
         core::PanelError::ApiError(msg) => FfiPanelError::ApiError { message: msg },
@@ -234,14 +249,16 @@ pub fn verify_ffi_bridge() -> String {
 #[uniffi::export]
 pub async fn generate_expert_response(
     prompt: String,
+    attachments: Vec<FfiAttachment>,
     history: Vec<FfiMessage>,
     expert: FfiExpert,
 ) -> Result<String, FfiPanelError> {
     let core_expert = map_expert(expert);
+    let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
     let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
     let provider = core::get_provider(&core_expert.config.provider_type);
     
-    provider.generate(&prompt, &core_history, &core_expert)
+    provider.generate(&prompt, &core_attachments, &core_history, &core_expert)
         .await
         .map_err(map_error)
 }
@@ -249,16 +266,18 @@ pub async fn generate_expert_response(
 #[uniffi::export]
 pub async fn generate_expert_stream(
     prompt: String,
+    attachments: Vec<FfiAttachment>,
     history: Vec<FfiMessage>,
     expert: FfiExpert,
     callback: Box<dyn FfiStreamCallback>,
 ) -> Result<(), FfiPanelError> {
     let core_expert = map_expert(expert);
+    let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
     let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
     let provider = core::get_provider(&core_expert.config.provider_type);
     let proxy = FfiCallbackProxy { callback };
 
-    provider.generate_stream(&prompt, &core_history, &core_expert, &proxy)
+    provider.generate_stream(&prompt, &core_attachments, &core_history, &core_expert, &proxy)
         .await
         .map_err(map_error)?;
 
@@ -269,15 +288,17 @@ pub async fn generate_expert_stream(
 #[uniffi::export]
 pub async fn execute_council_workflow(
     prompt: String,
+    attachments: Vec<FfiAttachment>,
     history: Vec<FfiMessage>,
     council: FfiCouncil,
     callback: Box<dyn FfiCouncilCallback>,
 ) -> Result<String, FfiPanelError> {
     let core_council = map_council(council);
+    let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
     let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
     let proxy = Arc::new(FfiCouncilCallbackProxy { callback });
 
-    core::run_council_flow(&prompt, &core_history, &core_council, proxy)
+    core::run_council_flow(&prompt, &core_attachments, &core_history, &core_council, proxy)
         .await
         .map_err(map_error)
 }

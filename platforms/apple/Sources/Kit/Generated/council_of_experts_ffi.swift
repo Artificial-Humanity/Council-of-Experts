@@ -459,6 +459,71 @@ fileprivate struct FfiConverterString: FfiConverter {
 }
 
 
+public struct FfiAttachment {
+    public var filePath: String
+    public var mimeType: String
+    public var base64Data: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(filePath: String, mimeType: String, base64Data: String) {
+        self.filePath = filePath
+        self.mimeType = mimeType
+        self.base64Data = base64Data
+    }
+}
+
+
+
+extension FfiAttachment: Equatable, Hashable {
+    public static func ==(lhs: FfiAttachment, rhs: FfiAttachment) -> Bool {
+        if lhs.filePath != rhs.filePath {
+            return false
+        }
+        if lhs.mimeType != rhs.mimeType {
+            return false
+        }
+        if lhs.base64Data != rhs.base64Data {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(filePath)
+        hasher.combine(mimeType)
+        hasher.combine(base64Data)
+    }
+}
+
+
+public struct FfiConverterTypeFfiAttachment: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttachment {
+        return
+            try FfiAttachment(
+                filePath: FfiConverterString.read(from: &buf), 
+                mimeType: FfiConverterString.read(from: &buf), 
+                base64Data: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAttachment, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.filePath, into: &buf)
+        FfiConverterString.write(value.mimeType, into: &buf)
+        FfiConverterString.write(value.base64Data, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeFfiAttachment_lift(_ buf: RustBuffer) throws -> FfiAttachment {
+    return try FfiConverterTypeFfiAttachment.lift(buf)
+}
+
+public func FfiConverterTypeFfiAttachment_lower(_ value: FfiAttachment) -> RustBuffer {
+    return FfiConverterTypeFfiAttachment.lower(value)
+}
+
+
 public struct FfiCouncil {
     public var id: String
     public var name: String
@@ -1573,6 +1638,28 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     }
 }
 
+fileprivate struct FfiConverterSequenceTypeFfiAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiAttachment]
+
+    public static func write(_ value: [FfiAttachment], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiAttachment.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiAttachment] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiAttachment]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiAttachment.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 fileprivate struct FfiConverterSequenceTypeFfiExpert: FfiConverterRustBuffer {
     typealias SwiftType = [FfiExpert]
 
@@ -1662,11 +1749,11 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
-public func executeCouncilWorkflow(prompt: String, history: [FfiMessage], council: FfiCouncil, callback: FfiCouncilCallback)async throws  -> String {
+public func executeCouncilWorkflow(prompt: String, attachments: [FfiAttachment], history: [FfiMessage], council: FfiCouncil, callback: FfiCouncilCallback)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_council_of_experts_ffi_fn_func_execute_council_workflow(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiCouncil.lower(council),FfiConverterCallbackInterfaceFfiCouncilCallback.lower(callback)
+                uniffi_council_of_experts_ffi_fn_func_execute_council_workflow(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiAttachment.lower(attachments),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiCouncil.lower(council),FfiConverterCallbackInterfaceFfiCouncilCallback.lower(callback)
                 )
             },
             pollFunc: ffi_council_of_experts_ffi_rust_future_poll_rust_buffer,
@@ -1676,11 +1763,11 @@ public func executeCouncilWorkflow(prompt: String, history: [FfiMessage], counci
             errorHandler: FfiConverterTypeFfiPanelError.lift
         )
 }
-public func generateExpertResponse(prompt: String, history: [FfiMessage], expert: FfiExpert)async throws  -> String {
+public func generateExpertResponse(prompt: String, attachments: [FfiAttachment], history: [FfiMessage], expert: FfiExpert)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_council_of_experts_ffi_fn_func_generate_expert_response(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert)
+                uniffi_council_of_experts_ffi_fn_func_generate_expert_response(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiAttachment.lower(attachments),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert)
                 )
             },
             pollFunc: ffi_council_of_experts_ffi_rust_future_poll_rust_buffer,
@@ -1690,11 +1777,11 @@ public func generateExpertResponse(prompt: String, history: [FfiMessage], expert
             errorHandler: FfiConverterTypeFfiPanelError.lift
         )
 }
-public func generateExpertStream(prompt: String, history: [FfiMessage], expert: FfiExpert, callback: FfiStreamCallback)async throws  {
+public func generateExpertStream(prompt: String, attachments: [FfiAttachment], history: [FfiMessage], expert: FfiExpert, callback: FfiStreamCallback)async throws  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_council_of_experts_ffi_fn_func_generate_expert_stream(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert),FfiConverterCallbackInterfaceFfiStreamCallback.lower(callback)
+                uniffi_council_of_experts_ffi_fn_func_generate_expert_stream(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiAttachment.lower(attachments),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiExpert.lower(expert),FfiConverterCallbackInterfaceFfiStreamCallback.lower(callback)
                 )
             },
             pollFunc: ffi_council_of_experts_ffi_rust_future_poll_void,
@@ -1726,13 +1813,13 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_func_execute_council_workflow() != 39072) {
+    if (uniffi_council_of_experts_ffi_checksum_func_execute_council_workflow() != 1391) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_func_generate_expert_response() != 23259) {
+    if (uniffi_council_of_experts_ffi_checksum_func_generate_expert_response() != 11960) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_func_generate_expert_stream() != 48203) {
+    if (uniffi_council_of_experts_ffi_checksum_func_generate_expert_stream() != 30516) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_func_verify_ffi_bridge() != 30466) {

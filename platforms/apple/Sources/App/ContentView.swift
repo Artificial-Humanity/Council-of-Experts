@@ -194,7 +194,7 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Text("v0.7.5")
+                    Text("v0.8.0")
                         .font(.caption2)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -307,6 +307,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
+                            // Display active file attachments label
                             if !viewModel.selectedFilePaths.isEmpty {
                                 HStack(spacing: 4) {
                                     Image(systemName: "paperclip")
@@ -319,6 +320,40 @@ struct ContentView: View {
                                 .background(Color.purple.opacity(0.15))
                                 .foregroundColor(.purple)
                                 .cornerRadius(4)
+                            }
+                            
+                            // ── Display Attached Media Thumbnail Previews ──
+                            if !viewModel.attachedImages.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(0..<viewModel.attachedImages.count, id: \.self) { idx in
+                                            let url = viewModel.attachedImages[idx]
+                                            if let nsImage = NSImage(contentsOf: url) {
+                                                ZStack(alignment: .topTrailing) {
+                                                    Image(nsImage: nsImage)
+                                                        .resizable()
+                                                        .aspectRatio(contentMode: .fill)
+                                                        .frame(width: 46, height: 46)
+                                                        .cornerRadius(6)
+                                                        .clipped()
+                                                    
+                                                    Button(action: {
+                                                        viewModel.removeAttachedImage(at: idx)
+                                                    }) {
+                                                        Image(systemName: "xmark.circle.fill")
+                                                            .foregroundColor(.red)
+                                                            .font(.caption2)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    .padding(.top, -2)
+                                                    .padding(.trailing, -2)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .frame(height: 52)
                             }
                             
                             TextEditor(text: $viewModel.prompt)
@@ -334,18 +369,31 @@ struct ContentView: View {
                         }
                         
                         VStack(spacing: 6) {
-                            Button(action: {
-                                viewModel.runCouncil()
-                            }) {
-                                HStack {
-                                    Image(systemName: "paperplane.fill")
-                                    Text("Send")
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    viewModel.attachImage()
+                                }) {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                        .font(.title3)
+                                        .foregroundColor(.secondary)
                                 }
-                                .frame(width: 80)
+                                .buttonStyle(.plain)
+                                .help("Attach Image")
+                                .disabled(viewModel.isExecuting)
+                                
+                                Button(action: {
+                                    viewModel.runCouncil()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "paperplane.fill")
+                                        Text("Send")
+                                    }
+                                    .frame(width: 80)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.purple)
+                                .disabled(viewModel.isExecuting || viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.purple)
-                            .disabled(viewModel.isExecuting || viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             
                             Button(action: {
                                 viewModel.clearHistory()
@@ -440,12 +488,38 @@ struct ChatBubble: View {
                     Text("You")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text(msg.content)
-                        .padding(10)
-                        .background(Color.purple.opacity(0.85))
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                        .textSelection(.enabled)
+                    
+                    VStack(alignment: .trailing, spacing: 6) {
+                        // Render Staged Image Attachments Inline inside bubble
+                        if let paths = msg.attachedImagePaths, !paths.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(paths, id: \.self) { path in
+                                        let url = URL(fileURLWithPath: path)
+                                        if let nsImage = NSImage(contentsOf: url) {
+                                            Image(nsImage: nsImage)
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fit)
+                                                .frame(maxHeight: 120)
+                                                .cornerRadius(8)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 8)
+                                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                                )
+                                        }
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: 400)
+                        }
+                        
+                        Text(msg.content)
+                            .textSelection(.enabled)
+                    }
+                    .padding(10)
+                    .background(Color.purple.opacity(0.85))
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
                 }
                 .frame(maxWidth: 600, alignment: .trailing)
             } else {

@@ -53,6 +53,13 @@ pub struct Expert {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    pub file_path: String,
+    pub mime_type: String,
+    pub base64_data: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Role {
     User,
     Assistant,
@@ -102,10 +109,11 @@ pub trait CouncilCallback: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn generate(&self, prompt: &str, history: &[Message], expert: &Expert) -> Result<String, PanelError>;
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError>;
     async fn generate_stream(
         &self,
         prompt: &str,
+        attachments: &[Attachment],
         history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
@@ -136,7 +144,7 @@ impl OpenAiCompatibleClient {
 
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiCompatibleClient {
-    async fn generate(&self, prompt: &str, history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
         let default_url = match expert.config.provider_type {
             ProviderType::Grok => "https://api.x.ai/v1".to_string(),
             _ => "https://api.openai.com/v1".to_string(),
@@ -165,9 +173,31 @@ impl LlmProvider for OpenAiCompatibleClient {
             }));
         }
 
+        let user_content = if attachments.is_empty() {
+            serde_json::json!(prompt)
+        } else {
+            let mut content_parts = vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": prompt
+                })
+            ];
+            for att in attachments {
+                if att.mime_type.starts_with("image/") {
+                    content_parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", att.mime_type, att.base64_data)
+                        }
+                    }));
+                }
+            }
+            serde_json::json!(content_parts)
+        };
+
         messages.push(serde_json::json!({
             "role": "user",
-            "content": prompt
+            "content": user_content
         }));
 
         let body = serde_json::json!({
@@ -204,6 +234,7 @@ impl LlmProvider for OpenAiCompatibleClient {
     async fn generate_stream(
         &self,
         prompt: &str,
+        attachments: &[Attachment],
         history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
@@ -236,9 +267,31 @@ impl LlmProvider for OpenAiCompatibleClient {
             }));
         }
 
+        let user_content = if attachments.is_empty() {
+            serde_json::json!(prompt)
+        } else {
+            let mut content_parts = vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": prompt
+                })
+            ];
+            for att in attachments {
+                if att.mime_type.starts_with("image/") {
+                    content_parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", att.mime_type, att.base64_data)
+                        }
+                    }));
+                }
+            }
+            serde_json::json!(content_parts)
+        };
+
         messages.push(serde_json::json!({
             "role": "user",
-            "content": prompt
+            "content": user_content
         }));
 
         let body = serde_json::json!({
@@ -310,7 +363,7 @@ impl AnthropicClient {
 
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicClient {
-    async fn generate(&self, prompt: &str, history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
         let url = "https://api.anthropic.com/v1/messages";
         
         let mut headers = HeaderMap::new();
@@ -332,9 +385,33 @@ impl LlmProvider for AnthropicClient {
             }));
         }
 
+        let user_content = if attachments.is_empty() {
+            serde_json::json!(prompt)
+        } else {
+            let mut content_parts = vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": prompt
+                })
+            ];
+            for att in attachments {
+                if att.mime_type.starts_with("image/") {
+                    content_parts.push(serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": att.mime_type,
+                            "data": att.base64_data
+                        }
+                    }));
+                }
+            }
+            serde_json::json!(content_parts)
+        };
+
         messages.push(serde_json::json!({
             "role": "user",
-            "content": prompt
+            "content": user_content
         }));
 
         let body = serde_json::json!({
@@ -373,6 +450,7 @@ impl LlmProvider for AnthropicClient {
     async fn generate_stream(
         &self,
         prompt: &str,
+        attachments: &[Attachment],
         history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
@@ -398,9 +476,33 @@ impl LlmProvider for AnthropicClient {
             }));
         }
 
+        let user_content = if attachments.is_empty() {
+            serde_json::json!(prompt)
+        } else {
+            let mut content_parts = vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": prompt
+                })
+            ];
+            for att in attachments {
+                if att.mime_type.starts_with("image/") {
+                    content_parts.push(serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": att.mime_type,
+                            "data": att.base64_data
+                        }
+                    }));
+                }
+            }
+            serde_json::json!(content_parts)
+        };
+
         messages.push(serde_json::json!({
             "role": "user",
-            "content": prompt
+            "content": user_content
         }));
 
         let body = serde_json::json!({
@@ -477,7 +579,7 @@ impl GeminiClient {
 
 #[async_trait::async_trait]
 impl LlmProvider for GeminiClient {
-    async fn generate(&self, prompt: &str, history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
         let api_key = expert.config.api_key.clone().unwrap_or_default();
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
@@ -498,9 +600,21 @@ impl LlmProvider for GeminiClient {
             }));
         }
 
+        let mut user_parts = vec![serde_json::json!({ "text": prompt })];
+        for att in attachments {
+            if att.mime_type.starts_with("image/") {
+                user_parts.push(serde_json::json!({
+                    "inline_data": {
+                        "mime_type": att.mime_type,
+                        "data": att.base64_data
+                    }
+                }));
+            }
+        }
+
         contents.push(serde_json::json!({
             "role": "user",
-            "parts": [{"text": prompt}]
+            "parts": user_parts
         }));
 
         let body = serde_json::json!({
@@ -540,6 +654,7 @@ impl LlmProvider for GeminiClient {
     async fn generate_stream(
         &self,
         prompt: &str,
+        attachments: &[Attachment],
         history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
@@ -564,9 +679,21 @@ impl LlmProvider for GeminiClient {
             }));
         }
 
+        let mut user_parts = vec![serde_json::json!({ "text": prompt })];
+        for att in attachments {
+            if att.mime_type.starts_with("image/") {
+                user_parts.push(serde_json::json!({
+                    "inline_data": {
+                        "mime_type": att.mime_type,
+                        "data": att.base64_data
+                    }
+                }));
+            }
+        }
+
         contents.push(serde_json::json!({
             "role": "user",
-            "parts": [{"text": prompt}]
+            "parts": user_parts
         }));
 
         let body = serde_json::json!({
@@ -616,8 +743,8 @@ impl LlmProvider for GeminiClient {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if let Some(delta) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
                         callback.on_chunk(delta);
+                        buffer.clear();
                     }
-                    buffer.clear();
                 }
             } else {
                 while let Some(delimiter_idx) = buffer.find("\n") {
@@ -649,13 +776,14 @@ impl MockProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for MockProvider {
-    async fn generate(&self, _prompt: &str, _history: &[Message], _expert: &Expert) -> Result<String, PanelError> {
+    async fn generate(&self, _prompt: &str, _attachments: &[Attachment], _history: &[Message], _expert: &Expert) -> Result<String, PanelError> {
         Ok("Mock response from expert".to_string())
     }
 
     async fn generate_stream(
         &self,
         prompt: &str,
+        _attachments: &[Attachment],
         _history: &[Message],
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
@@ -684,6 +812,7 @@ pub fn get_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
 // ── Council Flow Orchestration ──
 pub async fn run_council_flow(
     prompt: &str,
+    attachments: &[Attachment],
     history: &[Message],
     council: &Council,
     callback: Arc<dyn CouncilCallback + 'static>,
@@ -694,6 +823,7 @@ pub async fn run_council_flow(
     for expert in &council.experts {
         let expert = expert.clone();
         let prompt = prompt.to_string();
+        let attachments = attachments.to_vec();
         let history = history.to_vec();
         let cb = callback.clone();
         
@@ -725,7 +855,7 @@ pub async fn run_council_flow(
             };
             
             let provider = get_provider(&expert.config.provider_type);
-            match provider.generate_stream(&prompt, &history, &expert, &proxy).await {
+            match provider.generate_stream(&prompt, &attachments, &history, &expert, &proxy).await {
                 Ok(_) => {
                     let full_response = {
                         let text_lock = proxy.full_text.lock().unwrap();
@@ -769,6 +899,7 @@ pub async fn run_council_flow(
         for expert in &council.experts {
             let expert = expert.clone();
             let prompt = prompt.to_string();
+            let attachments = attachments.to_vec();
             let history = history.to_vec();
             let cb = callback.clone();
             
@@ -812,7 +943,7 @@ pub async fn run_council_flow(
                 };
                 
                 let provider = get_provider(&expert.config.provider_type);
-                match provider.generate_stream(&critique_prompt, &history, &expert, &proxy).await {
+                match provider.generate_stream(&critique_prompt, &attachments, &history, &expert, &proxy).await {
                     Ok(_) => {
                         let full_response = {
                             let text_lock = proxy.full_text.lock().unwrap();
@@ -901,7 +1032,7 @@ pub async fn run_council_flow(
     };
     
     let chairman_provider = get_provider(&council.chairman.config.provider_type);
-    match chairman_provider.generate_stream(&synthesis_prompt, &compiled_history, &council.chairman, &proxy).await {
+    match chairman_provider.generate_stream(&synthesis_prompt, &[], &compiled_history, &council.chairman, &proxy).await {
         Ok(_) => {
             let final_response = {
                 let text_lock = proxy.full_text.lock().unwrap();
@@ -972,7 +1103,6 @@ mod tests {
     #[test]
     fn test_get_provider_factory() {
         let _provider = get_provider(&ProviderType::OpenAi);
-        // factory verification only
     }
 
     #[tokio::test]
@@ -1020,7 +1150,7 @@ mod tests {
             chunks: Arc::new(Mutex::new(Vec::new())),
         });
 
-        let result = run_council_flow("hello", &[], &council, callback.clone()).await;
+        let result = run_council_flow("hello", &[], &[], &council, callback.clone()).await;
         assert!(result.is_ok());
         
         let started = callback.started_experts.lock().unwrap();
@@ -1032,7 +1162,7 @@ mod tests {
         assert_eq!(completed.len(), 2);
         assert_eq!(started_crit.len(), 2);
         assert_eq!(completed_crit.len(), 2);
-        assert!(started.contains(&"expert-1".to_string()));
-        assert!(started_crit.contains(&"expert-2".to_string()));
+        assert_eq!(started.contains(&"expert-1".to_string()), true);
+        assert_eq!(started_crit.contains(&"expert-2".to_string()), true);
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 import CouncilOfExpertsKit
 
 struct ExpertState {
@@ -25,6 +26,7 @@ struct CodableMessage: Codable, Identifiable {
     var role: String // "user", "assistant"
     var content: String
     var timestamp: UInt64
+    var attachedImagePaths: [String]?
 }
 
 class CouncilViewModel: ObservableObject, FfiCouncilCallback {
@@ -45,6 +47,9 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var workspacePath: String = ""
     @Published var scannedFiles: [URL] = []
     @Published var selectedFilePaths: Set<String> = []
+    
+    // Multimodal Image Attachments (Milestone 6)
+    @Published var attachedImages: [URL] = []
     
     // Dynamic expert configuration settings (Limit of 8 active experts)
     @Published var activeExpertCount: Int = 2 {
@@ -165,6 +170,14 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     func clearHistory() {
         messages.removeAll()
         try? FileManager.default.removeItem(at: sessionURL)
+        
+        // Clean staging attachments folder
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        let attachmentsDir = paths[0]
+            .appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+            .appendingPathComponent("attachments", isDirectory: true)
+        try? FileManager.default.removeItem(at: attachmentsDir)
+        
         chairmanText = ""
         chairmanStatus = "idle"
         chairmanError = nil
@@ -234,6 +247,55 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             selectedFilePaths.remove(path)
         } else {
             selectedFilePaths.insert(path)
+        }
+    }
+    
+    // ── Media Attachments Selection (Milestone 6) ──
+    func attachImage() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.image, .png, .jpeg, .webP, .gif]
+        panel.title = "Attach Images to Council Query"
+        
+        if panel.runModal() == .OK {
+            DispatchQueue.main.async {
+                self.attachedImages.append(contentsOf: panel.urls)
+            }
+        }
+    }
+    
+    func removeAttachedImage(at index: Int) {
+        if index >= 0 && index < attachedImages.count {
+            attachedImages.remove(at: index)
+        }
+    }
+    
+    private func copyImageToStaging(_ url: URL) -> URL? {
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        let attachmentsDir = paths[0]
+            .appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+            .appendingPathComponent("attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: attachmentsDir, withIntermediateDirectories: true)
+        
+        let destination = attachmentsDir.appendingPathComponent(UUID().uuidString + "_" + url.lastPathComponent)
+        do {
+            try FileManager.default.copyItem(at: url, to: destination)
+            return destination
+        } catch {
+            print("Failed to copy image: \(error)")
+            return nil
+        }
+    }
+    
+    private func getMimeType(for ext: String) -> String {
+        switch ext.lowercased() {
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return "image/jpeg"
         }
     }
     
@@ -490,6 +552,30 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         
         decoratedPrompt += currentPrompt
         
+        // ── Stage Attached Media Images and Encode to Base64 FFI records ──
+        var ffiAttachments: [FfiAttachment] = []
+        var stagedPaths: [String] = []
+        
+        for url in attachedImages {
+            if let stagedURL = copyImageToStaging(url) {
+                stagedPaths.append(stagedURL.path)
+                if let data = try? Data(contentsOf: stagedURL) {
+                    let base64 = data.base64EncodedString()
+                    let mime = getMimeType(for: stagedURL.pathExtension)
+                    ffiAttachments.append(
+                        FfiAttachment(
+                            filePath: stagedURL.path,
+                            mimeType: mime,
+                            base64Data: base64
+                        )
+                    )
+                }
+            }
+        }
+        
+        // Clear media selections for next input
+        attachedImages.removeAll()
+        
         let ffiHistory = messages.map { msg in
             FfiMessage(
                 id: msg.id,
@@ -499,12 +585,13 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             )
         }
         
-        // Append user prompt (with attachment list) to chat log bubble
+        // Append user prompt (with attachment lists and image paths) to chat log bubble
         let userMsg = CodableMessage(
             id: UUID().uuidString,
             role: "user",
             content: "\(fileAttachmentsList)\(currentPrompt)",
-            timestamp: UInt64(Date().timeIntervalSince1970)
+            timestamp: UInt64(Date().timeIntervalSince1970),
+            attachedImagePaths: stagedPaths.isEmpty ? nil : stagedPaths
         )
         messages.append(userMsg)
         saveSession()
@@ -514,6 +601,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             do {
                 _ = try await executeCouncilWorkflow(
                     prompt: decoratedPrompt,
+                    attachments: ffiAttachments,
                     history: ffiHistory,
                     council: council,
                     callback: self
