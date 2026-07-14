@@ -16,6 +16,7 @@ struct ExpertConfigInput {
     var providerType: String // "Mock Sandbox", "Anthropic Claude", "OpenAI GPT", "Google Gemini", "Local Ollama/LM Studio"
     var modelName: String
     var baseUrl: String
+    var systemPrompt: String
 }
 
 class CouncilViewModel: ObservableObject, FfiCouncilCallback {
@@ -30,9 +31,24 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var enableCritique: Bool = true
     
     // Dynamic expert configuration inputs
-    @Published var expert1Config = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-expert-1", baseUrl: "http://localhost:11434/v1")
-    @Published var expert2Config = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-expert-2", baseUrl: "http://localhost:11434/v1")
-    @Published var chairmanConfig = ExpertConfigInput(providerType: "Mock Sandbox", modelName: "mock-chairman", baseUrl: "http://localhost:11434/v1")
+    @Published var expert1Config = ExpertConfigInput(
+        providerType: "Mock Sandbox",
+        modelName: "mock-expert-1",
+        baseUrl: "http://localhost:11434/v1",
+        systemPrompt: "You are Claudia, a software developer focusing on type-safety, clean compilation boundaries, and architecture."
+    )
+    @Published var expert2Config = ExpertConfigInput(
+        providerType: "Mock Sandbox",
+        modelName: "mock-expert-2",
+        baseUrl: "http://localhost:11434/v1",
+        systemPrompt: "You are Oliver, a systems programmer focusing on extreme optimizations, memory management, and performance in low-level Rust/C++."
+    )
+    @Published var chairmanConfig = ExpertConfigInput(
+        providerType: "Mock Sandbox",
+        modelName: "mock-chairman",
+        baseUrl: "http://localhost:11434/v1",
+        systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and critiques, then synthesize them into a clean, complete response."
+    )
     
     // ── Drafting Phase Callbacks ──
     func onExpertStarted(expertId: String) {
@@ -145,7 +161,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         }
     }
     
-    private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput, systemPrompt: String) -> FfiExpert {
+    private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput) -> FfiExpert {
         let ffiType: FfiProviderType
         let modelName: String
         let apiKey: String?
@@ -204,7 +220,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
                 apiKey: apiKey,
                 temperature: 0.7
             ),
-            systemPrompt: systemPrompt
+            systemPrompt: input.systemPrompt
         )
     }
     
@@ -219,22 +235,19 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         let expert1 = buildFfiExpert(
             id: "expert-claudia",
             defaultName: "Claudia",
-            input: expert1Config,
-            systemPrompt: "You are Claudia, a software developer focusing on type-safety, clean compilation boundaries, and architecture."
+            input: expert1Config
         )
         
         let expert2 = buildFfiExpert(
             id: "expert-oliver",
             defaultName: "Oliver",
-            input: expert2Config,
-            systemPrompt: "You are Oliver, a systems programmer focusing on extreme optimizations, memory management, and performance in low-level Rust/C++."
+            input: expert2Config
         )
         
         let chairman = buildFfiExpert(
             id: "chairman-gem",
             defaultName: "Gaston (Chairman)",
-            input: chairmanConfig,
-            systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and critiques, then synthesize them into a clean, complete response."
+            input: chairmanConfig
         )
         
         let council = FfiCouncil(

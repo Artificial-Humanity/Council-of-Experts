@@ -252,6 +252,19 @@ struct ExpertConfigSection: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Behavior Prompt:")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    TextEditor(text: $config.systemPrompt)
+                        .frame(height: 50)
+                        .cornerRadius(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                }
             }
             .padding(.top, 6)
             .padding(.bottom, 4)
