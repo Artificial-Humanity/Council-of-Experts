@@ -1,5 +1,6 @@
 use thiserror::Error;
 use panel_of_experts_core as core;
+use std::sync::Arc;
 
 uniffi::setup_scaffolding!();
 
@@ -10,6 +11,7 @@ pub enum FfiProviderType {
     Gemini,
     Grok,
     LocalOpenAiCompatible,
+    Mock,
 }
 
 #[derive(uniffi::Record)]
@@ -89,6 +91,49 @@ impl core::StreamCallback for FfiCallbackProxy {
     }
 }
 
+#[uniffi::export(callback_interface)]
+pub trait FfiCouncilCallback: Send + Sync {
+    fn on_expert_started(&self, expert_id: String);
+    fn on_expert_chunk(&self, expert_id: String, chunk: String);
+    fn on_expert_completed(&self, expert_id: String, full_response: String);
+    fn on_expert_error(&self, expert_id: String, error: String);
+    fn on_chairman_started(&self);
+    fn on_chairman_chunk(&self, chunk: String);
+    fn on_chairman_completed(&self, full_response: String);
+    fn on_chairman_error(&self, error: String);
+}
+
+struct FfiCouncilCallbackProxy {
+    callback: Box<dyn FfiCouncilCallback>,
+}
+
+impl core::CouncilCallback for FfiCouncilCallbackProxy {
+    fn on_expert_started(&self, expert_id: &str) {
+        self.callback.on_expert_started(expert_id.to_string());
+    }
+    fn on_expert_chunk(&self, expert_id: &str, chunk: &str) {
+        self.callback.on_expert_chunk(expert_id.to_string(), chunk.to_string());
+    }
+    fn on_expert_completed(&self, expert_id: &str, full_response: &str) {
+        self.callback.on_expert_completed(expert_id.to_string(), full_response.to_string());
+    }
+    fn on_expert_error(&self, expert_id: &str, error: &str) {
+        self.callback.on_expert_error(expert_id.to_string(), error.to_string());
+    }
+    fn on_chairman_started(&self) {
+        self.callback.on_chairman_started();
+    }
+    fn on_chairman_chunk(&self, chunk: &str) {
+        self.callback.on_chairman_chunk(chunk.to_string());
+    }
+    fn on_chairman_completed(&self, full_response: &str) {
+        self.callback.on_chairman_completed(full_response.to_string());
+    }
+    fn on_chairman_error(&self, error: &str) {
+        self.callback.on_chairman_error(error.to_string());
+    }
+}
+
 // ── Mappings ──
 fn map_provider_type(pt: FfiProviderType) -> core::ProviderType {
     match pt {
@@ -97,6 +142,7 @@ fn map_provider_type(pt: FfiProviderType) -> core::ProviderType {
         FfiProviderType::Gemini => core::ProviderType::Gemini,
         FfiProviderType::Grok => core::ProviderType::Grok,
         FfiProviderType::LocalOpenAiCompatible => core::ProviderType::LocalOpenAiCompatible,
+        FfiProviderType::Mock => core::ProviderType::Mock,
     }
 }
 
@@ -136,6 +182,15 @@ fn map_message(m: FfiMessage) -> core::Message {
         role: map_role(m.role),
         content: m.content,
         timestamp: m.timestamp,
+    }
+}
+
+fn map_council(c: FfiCouncil) -> core::Council {
+    core::Council {
+        id: c.id,
+        name: c.name,
+        experts: c.experts.into_iter().map(map_expert).collect(),
+        chairman: map_expert(c.chairman),
     }
 }
 
@@ -187,4 +242,20 @@ pub async fn generate_expert_stream(
 
     proxy.callback.on_complete();
     Ok(())
+}
+
+#[uniffi::export]
+pub async fn execute_council_workflow(
+    prompt: String,
+    history: Vec<FfiMessage>,
+    council: FfiCouncil,
+    callback: Box<dyn FfiCouncilCallback>,
+) -> Result<String, FfiPanelError> {
+    let core_council = map_council(council);
+    let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
+    let proxy = Arc::new(FfiCouncilCallbackProxy { callback });
+
+    core::run_council_flow(&prompt, &core_history, &core_council, proxy)
+        .await
+        .map_err(map_error)
 }

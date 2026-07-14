@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use reqwest::header::{HeaderMap, HeaderValue};
 use futures_util::StreamExt;
+use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
+
+pub static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+});
 
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub enum PanelError {
@@ -22,6 +31,7 @@ pub enum ProviderType {
     Gemini,
     Grok,
     LocalOpenAiCompatible,
+    Mock,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +80,17 @@ pub struct Council {
 pub trait StreamCallback: Send + Sync {
     fn on_chunk(&self, chunk: &str);
     fn on_error(&self, error: &str);
+}
+
+pub trait CouncilCallback: Send + Sync {
+    fn on_expert_started(&self, expert_id: &str);
+    fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
+    fn on_expert_completed(&self, expert_id: &str, full_response: &str);
+    fn on_expert_error(&self, expert_id: &str, error: &str);
+    fn on_chairman_started(&self);
+    fn on_chairman_chunk(&self, chunk: &str);
+    fn on_chairman_completed(&self, full_response: &str);
+    fn on_chairman_error(&self, error: &str);
 }
 
 #[async_trait::async_trait]
@@ -287,8 +308,6 @@ impl LlmProvider for AnthropicClient {
 
         let mut messages = Vec::new();
         for msg in history {
-            // Anthropic doesn't support "system" role inside the messages array,
-            // it must be passed in the root "system" parameter.
             if let Role::System = msg.role {
                 continue;
             }
@@ -604,6 +623,33 @@ impl LlmProvider for GeminiClient {
     }
 }
 
+// ── Mock Provider ──
+pub struct MockProvider;
+
+impl MockProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for MockProvider {
+    async fn generate(&self, _prompt: &str, _history: &[Message], _expert: &Expert) -> Result<String, PanelError> {
+        Ok("Mock response from expert".to_string())
+    }
+
+    async fn generate_stream(
+        &self,
+        _prompt: &str,
+        _history: &[Message],
+        expert: &Expert,
+        callback: &(dyn StreamCallback + 'static),
+    ) -> Result<(), PanelError> {
+        callback.on_chunk(&format!("Mock chunk from {}", expert.name));
+        Ok(())
+    }
+}
+
 // ── Provider Factory ──
 pub fn get_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
     match provider_type {
@@ -612,12 +658,172 @@ pub fn get_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
         }
         ProviderType::Anthropic => Box::new(AnthropicClient::new()),
         ProviderType::Gemini => Box::new(GeminiClient::new()),
+        ProviderType::Mock => Box::new(MockProvider::new()),
+    }
+}
+
+// ── Council Flow Orchestration ──
+pub async fn run_council_flow(
+    prompt: &str,
+    history: &[Message],
+    council: &Council,
+    callback: Arc<dyn CouncilCallback + 'static>,
+) -> Result<String, PanelError> {
+    let mut draft_handles = Vec::new();
+    
+    for expert in &council.experts {
+        let expert = expert.clone();
+        let prompt = prompt.to_string();
+        let history = history.to_vec();
+        let cb = callback.clone();
+        
+        let handle = RUNTIME.spawn(async move {
+            cb.on_expert_started(&expert.id);
+            
+            struct ExpertStreamProxy {
+                expert_id: String,
+                cb: Arc<dyn CouncilCallback + 'static>,
+                full_text: Mutex<String>,
+            }
+            
+            impl StreamCallback for ExpertStreamProxy {
+                fn on_chunk(&self, chunk: &str) {
+                    self.cb.on_expert_chunk(&self.expert_id, chunk);
+                    if let Ok(mut text) = self.full_text.lock() {
+                        text.push_str(chunk);
+                    }
+                }
+                fn on_error(&self, error: &str) {
+                    self.cb.on_expert_error(&self.expert_id, error);
+                }
+            }
+            
+            let proxy = ExpertStreamProxy {
+                expert_id: expert.id.clone(),
+                cb: cb.clone(),
+                full_text: Mutex::new(String::new()),
+            };
+            
+            let provider = get_provider(&expert.config.provider_type);
+            match provider.generate_stream(&prompt, &history, &expert, &proxy).await {
+                Ok(_) => {
+                    let full_response = {
+                        let text_lock = proxy.full_text.lock().unwrap();
+                        text_lock.clone()
+                    };
+                    cb.on_expert_completed(&expert.id, &full_response);
+                    Ok((expert.id.clone(), full_response))
+                }
+                Err(e) => {
+                    cb.on_expert_error(&expert.id, &e.to_string());
+                    Err(e)
+                }
+            }
+        });
+        
+        draft_handles.push(handle);
+    }
+    
+    let mut expert_drafts = Vec::new();
+    for handle in draft_handles {
+        match handle.await {
+            Ok(Ok((expert_id, response))) => {
+                expert_drafts.push((expert_id, response));
+            }
+            Ok(Err(e)) => {
+                eprintln!("Expert execution error: {:?}", e);
+            }
+            Err(e) => {
+                eprintln!("Tokio task join error: {:?}", e);
+            }
+        }
+    }
+    
+    callback.on_chairman_started();
+    
+    let mut compiled_history = history.to_vec();
+    for (expert_id, draft) in &expert_drafts {
+        compiled_history.push(Message {
+            id: format!("msg_draft_{}", expert_id),
+            role: Role::ExpertDraft { expert_id: expert_id.clone() },
+            content: draft.clone(),
+            timestamp: 0,
+        });
+    }
+    
+    let synthesis_prompt = format!(
+        "The user query is: \"{}\"\n\nHere are the drafts generated by the active expert council:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
+        prompt,
+        expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n")
+    );
+    
+    struct ChairmanStreamProxy {
+        cb: Arc<dyn CouncilCallback + 'static>,
+        full_text: Mutex<String>,
+    }
+    
+    impl StreamCallback for ChairmanStreamProxy {
+        fn on_chunk(&self, chunk: &str) {
+            self.cb.on_chairman_chunk(chunk);
+            if let Ok(mut text) = self.full_text.lock() {
+                text.push_str(chunk);
+            }
+        }
+        fn on_error(&self, error: &str) {
+            self.cb.on_chairman_error(error);
+        }
+    }
+    
+    let proxy = ChairmanStreamProxy {
+        cb: callback.clone(),
+        full_text: Mutex::new(String::new()),
+    };
+    
+    let chairman_provider = get_provider(&council.chairman.config.provider_type);
+    match chairman_provider.generate_stream(&synthesis_prompt, &compiled_history, &council.chairman, &proxy).await {
+        Ok(_) => {
+            let final_response = {
+                let text_lock = proxy.full_text.lock().unwrap();
+                text_lock.clone()
+            };
+            callback.on_chairman_completed(&final_response);
+            Ok(final_response)
+        }
+        Err(e) => {
+            callback.on_chairman_error(&e.to_string());
+            Err(e)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockCouncilCallback {
+        started_experts: Arc<Mutex<Vec<String>>>,
+        completed_experts: Arc<Mutex<Vec<String>>>,
+        chunks: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CouncilCallback for MockCouncilCallback {
+        fn on_expert_started(&self, expert_id: &str) {
+            self.started_experts.lock().unwrap().push(expert_id.to_string());
+        }
+        fn on_expert_chunk(&self, _expert_id: &str, chunk: &str) {
+            self.chunks.lock().unwrap().push(chunk.to_string());
+        }
+        fn on_expert_completed(&self, expert_id: &str, _full_response: &str) {
+            self.completed_experts.lock().unwrap().push(expert_id.to_string());
+        }
+        fn on_expert_error(&self, _expert_id: &str, _error: &str) {}
+        fn on_chairman_started(&self) {}
+        fn on_chairman_chunk(&self, chunk: &str) {
+            self.chunks.lock().unwrap().push(chunk.to_string());
+        }
+        fn on_chairman_completed(&self, _full_response: &str) {}
+        fn on_chairman_error(&self, _error: &str) {}
+    }
 
     #[test]
     fn test_role_to_string() {
@@ -632,5 +838,58 @@ mod tests {
     fn test_get_provider_factory() {
         let _provider = get_provider(&ProviderType::OpenAi);
         // factory verification only
+    }
+
+    #[tokio::test]
+    async fn test_run_council_flow() {
+        let mock_config = ProviderConfig {
+            name: "Mock Provider".to_string(),
+            provider_type: ProviderType::Mock,
+            model_name: "mock-model".to_string(),
+            base_url: None,
+            api_key: None,
+            temperature: None,
+        };
+
+        let council = Council {
+            id: "test-council".to_string(),
+            name: "Test Council".to_string(),
+            experts: vec![
+                Expert {
+                    id: "expert-1".to_string(),
+                    name: "Expert 1".to_string(),
+                    config: mock_config.clone(),
+                    system_prompt: "you are expert 1".to_string(),
+                },
+                Expert {
+                    id: "expert-2".to_string(),
+                    name: "Expert 2".to_string(),
+                    config: mock_config.clone(),
+                    system_prompt: "you are expert 2".to_string(),
+                },
+            ],
+            chairman: Expert {
+                id: "chairman".to_string(),
+                name: "Chairman".to_string(),
+                config: mock_config.clone(),
+                system_prompt: "you are the chairman".to_string(),
+            },
+        };
+
+        let callback = Arc::new(MockCouncilCallback {
+            started_experts: Arc::new(Mutex::new(Vec::new())),
+            completed_experts: Arc::new(Mutex::new(Vec::new())),
+            chunks: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let result = run_council_flow("hello", &[], &council, callback.clone()).await;
+        assert!(result.is_ok());
+        
+        let started = callback.started_experts.lock().unwrap();
+        let completed = callback.completed_experts.lock().unwrap();
+        assert_eq!(started.len(), 2);
+        assert_eq!(completed.len(), 2);
+        assert!(started.contains(&"expert-1".to_string()));
+        assert!(started.contains(&"expert-2".to_string()));
     }
 }

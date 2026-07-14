@@ -251,6 +251,62 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStr
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD0
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD1
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD1
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD2
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD2
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod2)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD3
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD3
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod3)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD4
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD4
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod4)(uint64_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD5
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD5
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod5)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD6
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD6
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod6)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD7
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK_METHOD7
+typedef void (*UniffiCallbackInterfaceFfiCouncilCallbackMethod7)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_STREAM_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FFI_STREAM_CALLBACK_METHOD0
 typedef void (*UniffiCallbackInterfaceFfiStreamCallbackMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -272,6 +328,21 @@ typedef void (*UniffiCallbackInterfaceFfiStreamCallbackMethod2)(uint64_t, RustBu
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_FFI_COUNCIL_CALLBACK
+typedef struct UniffiVTableCallbackInterfaceFfiCouncilCallback {
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod0 _Nonnull onExpertStarted;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod1 _Nonnull onExpertChunk;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod2 _Nonnull onExpertCompleted;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod3 _Nonnull onExpertError;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod4 _Nonnull onChairmanStarted;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod5 _Nonnull onChairmanChunk;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod6 _Nonnull onChairmanCompleted;
+    UniffiCallbackInterfaceFfiCouncilCallbackMethod7 _Nonnull onChairmanError;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceFfiCouncilCallback;
+
+#endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_FFI_STREAM_CALLBACK
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_FFI_STREAM_CALLBACK
 typedef struct UniffiVTableCallbackInterfaceFfiStreamCallback {
@@ -282,9 +353,19 @@ typedef struct UniffiVTableCallbackInterfaceFfiStreamCallback {
 } UniffiVTableCallbackInterfaceFfiStreamCallback;
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_INIT_CALLBACK_VTABLE_FFICOUNCILCALLBACK
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_INIT_CALLBACK_VTABLE_FFICOUNCILCALLBACK
+void uniffi_panel_of_experts_ffi_fn_init_callback_vtable_fficouncilcallback(UniffiVTableCallbackInterfaceFfiCouncilCallback* _Nonnull vtable
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_INIT_CALLBACK_VTABLE_FFISTREAMCALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_INIT_CALLBACK_VTABLE_FFISTREAMCALLBACK
 void uniffi_panel_of_experts_ffi_fn_init_callback_vtable_ffistreamcallback(UniffiVTableCallbackInterfaceFfiStreamCallback* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_FUNC_EXECUTE_COUNCIL_WORKFLOW
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_FUNC_EXECUTE_COUNCIL_WORKFLOW
+uint64_t uniffi_panel_of_experts_ffi_fn_func_execute_council_workflow(RustBuffer prompt, RustBuffer history, RustBuffer council, uint64_t callback
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_FN_FUNC_GENERATE_EXPERT_RESPONSE
@@ -583,6 +664,12 @@ void ffi_panel_of_experts_ffi_rust_future_free_void(uint64_t handle
 void ffi_panel_of_experts_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_EXECUTE_COUNCIL_WORKFLOW
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_EXECUTE_COUNCIL_WORKFLOW
+uint16_t uniffi_panel_of_experts_ffi_checksum_func_execute_council_workflow(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_GENERATE_EXPERT_RESPONSE
 #define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_GENERATE_EXPERT_RESPONSE
 uint16_t uniffi_panel_of_experts_ffi_checksum_func_generate_expert_response(void
@@ -598,6 +685,54 @@ uint16_t uniffi_panel_of_experts_ffi_checksum_func_generate_expert_stream(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_VERIFY_FFI_BRIDGE
 #define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_FUNC_VERIFY_FFI_BRIDGE
 uint16_t uniffi_panel_of_experts_ffi_checksum_func_verify_ffi_bridge(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_STARTED
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_started(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_CHUNK
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_CHUNK
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_chunk(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_COMPLETED
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_ERROR
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_EXPERT_ERROR
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_error(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_STARTED
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_started(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_CHUNK
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_CHUNK
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_chunk(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_COMPLETED
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_ERROR
+#define UNIFFI_FFIDEF_UNIFFI_PANEL_OF_EXPERTS_FFI_CHECKSUM_METHOD_FFICOUNCILCALLBACK_ON_CHAIRMAN_ERROR
+uint16_t uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_error(void
     
 );
 #endif

@@ -841,6 +841,7 @@ public enum FfiProviderType {
     case gemini
     case grok
     case localOpenAiCompatible
+    case mock
 }
 
 
@@ -860,6 +861,8 @@ public struct FfiConverterTypeFfiProviderType: FfiConverterRustBuffer {
         case 4: return .grok
         
         case 5: return .localOpenAiCompatible
+        
+        case 6: return .mock
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -887,6 +890,10 @@ public struct FfiConverterTypeFfiProviderType: FfiConverterRustBuffer {
         
         case .localOpenAiCompatible:
             writeInt(&buf, Int32(5))
+        
+        
+        case .mock:
+            writeInt(&buf, Int32(6))
         
         }
     }
@@ -992,13 +999,23 @@ extension FfiRole: Equatable, Hashable {}
 
 
 
-public protocol FfiStreamCallback : AnyObject {
+public protocol FfiCouncilCallback : AnyObject {
     
-    func onChunk(chunk: String) 
+    func onExpertStarted(expertId: String) 
     
-    func onComplete() 
+    func onExpertChunk(expertId: String, chunk: String) 
     
-    func onError(error: String) 
+    func onExpertCompleted(expertId: String, fullResponse: String) 
+    
+    func onExpertError(expertId: String, error: String) 
+    
+    func onChairmanStarted() 
+    
+    func onChairmanChunk(chunk: String) 
+    
+    func onChairmanCompleted(fullResponse: String) 
+    
+    func onChairmanError(error: String) 
     
 }
 
@@ -1009,6 +1026,263 @@ private let IDX_CALLBACK_FREE: Int32 = 0
 private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
 private let UNIFFI_CALLBACK_ERROR: Int32 = 1
 private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceFfiCouncilCallback = UniffiVTableCallbackInterfaceFfiCouncilCallback(
+        onExpertStarted: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertStarted(
+                     expertId: try FfiConverterString.lift(expertId)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onExpertChunk: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            chunk: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertChunk(
+                     expertId: try FfiConverterString.lift(expertId),
+                     chunk: try FfiConverterString.lift(chunk)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onExpertCompleted: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            fullResponse: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertCompleted(
+                     expertId: try FfiConverterString.lift(expertId),
+                     fullResponse: try FfiConverterString.lift(fullResponse)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onExpertError: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            error: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertError(
+                     expertId: try FfiConverterString.lift(expertId),
+                     error: try FfiConverterString.lift(error)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onChairmanStarted: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChairmanStarted(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onChairmanChunk: { (
+            uniffiHandle: UInt64,
+            chunk: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChairmanChunk(
+                     chunk: try FfiConverterString.lift(chunk)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onChairmanCompleted: { (
+            uniffiHandle: UInt64,
+            fullResponse: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChairmanCompleted(
+                     fullResponse: try FfiConverterString.lift(fullResponse)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onChairmanError: { (
+            uniffiHandle: UInt64,
+            error: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChairmanError(
+                     error: try FfiConverterString.lift(error)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface FfiCouncilCallback: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitFfiCouncilCallback() {
+    uniffi_panel_of_experts_ffi_fn_init_callback_vtable_fficouncilcallback(&UniffiCallbackInterfaceFfiCouncilCallback.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+fileprivate struct FfiConverterCallbackInterfaceFfiCouncilCallback {
+    fileprivate static var handleMap = UniffiHandleMap<FfiCouncilCallback>()
+}
+
+extension FfiConverterCallbackInterfaceFfiCouncilCallback : FfiConverter {
+    typealias SwiftType = FfiCouncilCallback
+    typealias FfiType = UInt64
+
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+
+
+public protocol FfiStreamCallback : AnyObject {
+    
+    func onChunk(chunk: String) 
+    
+    func onComplete() 
+    
+    func onError(error: String) 
+    
+}
+
+
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
 fileprivate struct UniffiCallbackInterfaceFfiStreamCallback {
@@ -1257,6 +1531,20 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
+public func executeCouncilWorkflow(prompt: String, history: [FfiMessage], council: FfiCouncil, callback: FfiCouncilCallback)async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_panel_of_experts_ffi_fn_func_execute_council_workflow(FfiConverterString.lower(prompt),FfiConverterSequenceTypeFfiMessage.lower(history),FfiConverterTypeFfiCouncil.lower(council),FfiConverterCallbackInterfaceFfiCouncilCallback.lower(callback)
+                )
+            },
+            pollFunc: ffi_panel_of_experts_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_panel_of_experts_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_panel_of_experts_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFfiPanelError.lift
+        )
+}
 public func generateExpertResponse(prompt: String, history: [FfiMessage], expert: FfiExpert)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
@@ -1307,6 +1595,9 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_panel_of_experts_ffi_checksum_func_execute_council_workflow() != 15332) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_panel_of_experts_ffi_checksum_func_generate_expert_response() != 16015) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1314,6 +1605,30 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_panel_of_experts_ffi_checksum_func_verify_ffi_bridge() != 35799) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_started() != 55467) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_chunk() != 28794) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_completed() != 2636) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_error() != 12554) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_started() != 16997) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_chunk() != 3533) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_completed() != 35934) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_panel_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_error() != 63293) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_panel_of_experts_ffi_checksum_method_ffistreamcallback_on_chunk() != 22332) {
@@ -1326,6 +1641,7 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitFfiCouncilCallback()
     uniffiCallbackInitFfiStreamCallback()
     return InitializationResult.ok
 }
