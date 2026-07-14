@@ -9,3 +9,7 @@ DerivedData/
 
 # OS-level
 .DS_Store
+
+# App bundle
+/PanelOfExperts.app/
+

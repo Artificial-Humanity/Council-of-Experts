@@ -7,7 +7,8 @@ let package = Package(
         .macOS(.v14), .iOS(.v17)
     ],
     products: [
-        .library(name: "PanelOfExpertsKit", targets: ["PanelOfExpertsKit"])
+        .library(name: "PanelOfExpertsKit", targets: ["PanelOfExpertsKit"]),
+        .executable(name: "PanelOfExpertsApp", targets: ["PanelOfExpertsApp"])
     ],
     dependencies: [],
     targets: [
@@ -24,6 +25,16 @@ let package = Package(
                 "panel_of_experts_ffiFFI"
             ],
             path: "Sources/Kit"
+        ),
+        
+        // SwiftUI App executable
+        .executableTarget(
+            name: "PanelOfExpertsApp",
+            dependencies: [
+                "PanelOfExpertsKit",
+                "panel_of_experts_ffiFFI"
+            ],
+            path: "Sources/App"
         )
     ]
 )
