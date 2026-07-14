@@ -26,11 +26,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var isExecuting: Bool = false
     @Published var prompt: String = "Design a zero-dependency configuration parser in Rust."
     
-    // Config values for live APIs
-    @Published var openAiKey: String = ""
-    @Published var anthropicKey: String = ""
-    @Published var geminiKey: String = ""
-    @Published var grokKey: String = ""
+    // Config values
     @Published var enableCritique: Bool = true
     
     // Dynamic expert configuration inputs
@@ -164,22 +160,26 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         case "Anthropic Claude":
             ffiType = .anthropic
             modelName = input.modelName.isEmpty ? "claude-3-5-sonnet-latest" : input.modelName
-            apiKey = anthropicKey.isEmpty ? nil : anthropicKey
+            let key = UserDefaults.standard.string(forKey: "anthropicKey") ?? ""
+            apiKey = key.isEmpty ? nil : key
             baseUrl = nil
         case "OpenAI GPT":
             ffiType = .openAi
             modelName = input.modelName.isEmpty ? "gpt-4o" : input.modelName
-            apiKey = openAiKey.isEmpty ? nil : openAiKey
+            let key = UserDefaults.standard.string(forKey: "openAiKey") ?? ""
+            apiKey = key.isEmpty ? nil : key
             baseUrl = nil
         case "Google Gemini":
             ffiType = .gemini
             modelName = input.modelName.isEmpty ? "gemini-1.5-pro" : input.modelName
-            apiKey = geminiKey.isEmpty ? nil : geminiKey
+            let key = UserDefaults.standard.string(forKey: "geminiKey") ?? ""
+            apiKey = key.isEmpty ? nil : key
             baseUrl = nil
         case "xAI Grok":
             ffiType = .grok
             modelName = input.modelName.isEmpty ? "grok-2" : input.modelName
-            apiKey = grokKey.isEmpty ? nil : grokKey
+            let key = UserDefaults.standard.string(forKey: "grokKey") ?? ""
+            apiKey = key.isEmpty ? nil : key
             baseUrl = nil
         case "Local Ollama/LM Studio":
             ffiType = .localOpenAiCompatible
