@@ -31,8 +31,15 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
-                        .font(.subheadline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
+                            .font(.subheadline)
+                        
+                        Toggle("Agent Coding Mode", isOn: $viewModel.isAgentCodingMode)
+                            .font(.subheadline)
+                            .foregroundColor(.purple)
+                            .help("Allows experts to write workspace files and run builds automatically")
+                    }
                     
                     Divider()
                     
@@ -85,6 +92,18 @@ struct ContentView: View {
                                     .font(.system(size: 9))
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
+                                
+                                if viewModel.isAgentCodingMode {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Build & Test Command")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.purple)
+                                        TextField("e.g. cargo test or npm test", text: $viewModel.buildCommand)
+                                            .textFieldStyle(.roundedBorder)
+                                            .font(.system(size: 10, design: .monospaced))
+                                    }
+                                    .padding(.top, 4)
+                                }
                                 
                                 if !viewModel.scannedFiles.isEmpty {
                                     DisclosureGroup("Workspace Files (\(viewModel.scannedFiles.count))") {
@@ -163,7 +182,7 @@ struct ContentView: View {
                                 .scaleEffect(viewModel.isExecuting ? 1.2 : 1.0)
                                 .animation(viewModel.isExecuting ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: viewModel.isExecuting)
                             
-                            Text(viewModel.isExecuting ? "Orchestrating..." : "System Idle")
+                            Text(viewModel.isExecuting ? (viewModel.isAgentCodingMode ? "Coding Agent Active..." : "Orchestrating...") : "System Idle")
                                 .font(.caption)
                                 .fontWeight(.medium)
                         }
@@ -189,9 +208,9 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Council of Experts")
                             .font(.system(size: 20, weight: .bold, design: .rounded))
-                        Text("Multi-turn consensus chat dashboard")
+                        Text(viewModel.isAgentCodingMode ? "Multi-Source Agentic Coding Console" : "Multi-turn consensus chat dashboard")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(viewModel.isAgentCodingMode ? .purple : .secondary)
                     }
                     Spacer()
                     Text("v0.8.0")
@@ -213,10 +232,10 @@ struct ContentView: View {
                             if viewModel.messages.isEmpty {
                                 VStack(spacing: 12) {
                                     Spacer()
-                                    Image(systemName: "crown.fill")
+                                    Image(systemName: viewModel.isAgentCodingMode ? "terminal.fill" : "crown.fill")
                                         .font(.system(size: 40))
                                         .foregroundColor(.purple.opacity(0.3))
-                                    Text("Begin a consensus dialogue with Gaston and his panel experts.")
+                                    Text(viewModel.isAgentCodingMode ? "State a software engineering goal. The council will patch files and test their compilation." : "Begin a consensus dialogue with Gaston and his panel experts.")
                                         .font(.subheadline)
                                         .foregroundColor(.secondary)
                                         .multilineTextAlignment(.center)
@@ -302,6 +321,47 @@ struct ContentView: View {
                 .background(.thinMaterial)
                 
                 Divider()
+                
+                // ── Agent Coding Build Console View (Milestone 8) ──
+                if viewModel.isAgentCodingMode && !viewModel.buildStatusLog.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "terminal.fill")
+                                .font(.caption)
+                                .foregroundColor(.purple)
+                            Text("Agent Execution & Build Console")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button(action: {
+                                viewModel.buildStatusLog = ""
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Clear Console")
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                        
+                        ScrollView {
+                            Text(viewModel.buildStatusLog)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.green)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                        }
+                        .background(Color.black)
+                        .cornerRadius(8)
+                        .frame(height: 120)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                    }
+                    .background(.thinMaterial)
+                    Divider()
+                }
                 
                 // Bottom Input Area
                 VStack(spacing: 0) {
@@ -613,12 +673,7 @@ struct ExpertCardView: View {
                     }
                 }.tag(1)
             }
-            .pickerStyle(.segmented)
-            .onChange(of: state.critiqueStatus) { _, newValue in
-                if newValue == "drafting" {
-                    selectedTab = 1
-                }
-            }
+            .segment(selectedTab: $selectedTab, state: state)
             
             Divider()
             
@@ -679,6 +734,18 @@ struct ExpertCardView: View {
     
     private var isStreaming: Bool {
         state.status == "drafting" || state.critiqueStatus == "drafting"
+    }
+}
+
+// Segmentation helper extension to auto-manage tab selection during streaming updates
+extension View {
+    func segment(selectedTab: Binding<Int>, state: ExpertState) -> some View {
+        self.pickerStyle(.segmented)
+            .onChange(of: state.critiqueStatus) { _, newValue in
+                if newValue == "drafting" {
+                    selectedTab.wrappedValue = 1
+                }
+            }
     }
 }
 

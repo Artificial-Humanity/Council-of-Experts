@@ -1048,6 +1048,366 @@ pub async fn run_council_flow(
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileEdit {
+    pub path: String,
+    pub content: String,
+}
+
+pub fn parse_file_edits(text: &str) -> Vec<FileEdit> {
+    let mut edits = Vec::new();
+    let start_tag = "<write_file path=\"";
+    let end_tag = "</write_file>";
+    
+    let mut cursor = 0;
+    while let Some(start_idx) = text[cursor..].find(start_tag) {
+        let absolute_start = cursor + start_idx;
+        let path_start = absolute_start + start_tag.len();
+        if let Some(path_end_offset) = text[path_start..].find("\">") {
+            let path_end = path_start + path_end_offset;
+            let path = text[path_start..path_end].to_string();
+            
+            let content_start = path_end + 2;
+            if let Some(end_offset) = text[content_start..].find(end_tag) {
+                let content_end = content_start + end_offset;
+                let content = text[content_start..content_end].to_string();
+                
+                edits.push(FileEdit { path, content });
+                cursor = content_end + end_tag.len();
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    edits
+}
+
+pub fn run_build_command(workspace_path: &str, command_str: &str) -> (bool, String) {
+    let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
+    let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+    
+    let output = std::process::Command::new(shell)
+        .arg(flag)
+        .arg(command_str)
+        .current_dir(workspace_path)
+        .output();
+        
+    match output {
+        Ok(out) => {
+            let success = out.status.success();
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let combined = format!("{}\n{}", stdout, stderr);
+            (success, combined)
+        }
+        Err(e) => {
+            (false, format!("Failed to run build command: {}", e))
+        }
+    }
+}
+
+pub trait CodingCallback: Send + Sync {
+    fn on_expert_started(&self, expert_id: &str);
+    fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
+    fn on_expert_completed(&self, expert_id: &str, full_response: &str);
+    fn on_expert_error(&self, expert_id: &str, error: &str);
+
+    fn on_file_write(&self, path: &str);
+    fn on_build_started(&self, command: &str);
+    fn on_build_completed(&self, success: bool, output: &str);
+
+    fn on_chairman_started(&self);
+    fn on_chairman_chunk(&self, chunk: &str);
+    fn on_chairman_completed(&self, full_response: &str);
+    fn on_chairman_error(&self, error: &str);
+}
+
+pub async fn run_agent_coding_flow(
+    prompt: &str,
+    workspace_path: &str,
+    build_command: &str,
+    attachments: &[Attachment],
+    history: &[Message],
+    council: &Council,
+    callback: Arc<dyn CodingCallback + 'static>,
+) -> Result<String, PanelError> {
+    let mut draft_handles = Vec::new();
+    let system_instructions = "\n\nIMPORTANT: You are in Coding Agent Mode. You have read access to the local workspace files. If you propose creating or modifying files, you MUST write them out fully using the following XML format:\n<write_file path=\"relative/path/to/file\">\n// file contents here\n</write_file>\nMake sure to write valid code that will compile.";
+    
+    for expert in &council.experts {
+        let expert = expert.clone();
+        let prompt = prompt.to_string();
+        let attachments = attachments.to_vec();
+        let history = history.to_vec();
+        let cb = callback.clone();
+        let system_instructions = system_instructions.to_string();
+        
+        let handle = RUNTIME.spawn(async move {
+            cb.on_expert_started(&expert.id);
+            
+            struct ExpertStreamProxy {
+                expert_id: String,
+                cb: Arc<dyn CodingCallback + 'static>,
+                full_text: Mutex<String>,
+            }
+            
+            impl StreamCallback for ExpertStreamProxy {
+                fn on_chunk(&self, chunk: &str) {
+                    self.cb.on_expert_chunk(&self.expert_id, chunk);
+                    if let Ok(mut text) = self.full_text.lock() {
+                        text.push_str(chunk);
+                    }
+                }
+                fn on_error(&self, error: &str) {
+                    self.cb.on_expert_error(&self.expert_id, error);
+                }
+            }
+            
+            let proxy = ExpertStreamProxy {
+                expert_id: expert.id.clone(),
+                cb: cb.clone(),
+                full_text: Mutex::new(String::new()),
+            };
+            
+            let mut modified_expert = expert.clone();
+            modified_expert.system_prompt += &system_instructions;
+            
+            let provider = get_provider(&modified_expert.config.provider_type);
+            match provider.generate_stream(&prompt, &attachments, &history, &modified_expert, &proxy).await {
+                Ok(_) => {
+                    let full_response = {
+                        let text_lock = proxy.full_text.lock().unwrap();
+                        text_lock.clone()
+                    };
+                    cb.on_expert_completed(&expert.id, &full_response);
+                    Ok((expert.id.clone(), full_response))
+                }
+                Err(e) => {
+                    cb.on_expert_error(&expert.id, &e.to_string());
+                    Err(e)
+                }
+            }
+        });
+        
+        draft_handles.push(handle);
+    }
+    
+    let mut expert_drafts = Vec::new();
+    for handle in draft_handles {
+        match handle.await {
+            Ok(Ok((expert_id, response))) => {
+                expert_drafts.push((expert_id, response));
+            }
+            Ok(Err(e)) => {
+                eprintln!("Expert draft error: {:?}", e);
+            }
+            Err(e) => {
+                eprintln!("Tokio task join error: {:?}", e);
+            }
+        }
+    }
+
+    for (_expert_id, draft) in &expert_drafts {
+        let edits = parse_file_edits(draft);
+        for edit in edits {
+            let full_file_path = std::path::Path::new(workspace_path).join(&edit.path);
+            if let Some(parent) = full_file_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::write(&full_file_path, &edit.content).is_ok() {
+                callback.on_file_write(&edit.path);
+            }
+        }
+    }
+
+    let mut build_success = true;
+    let mut build_log = String::new();
+    if !build_command.trim().is_empty() && !workspace_path.trim().is_empty() {
+        callback.on_build_started(build_command);
+        let (success, log) = run_build_command(workspace_path, build_command);
+        build_success = success;
+        build_log = log;
+        callback.on_build_completed(success, &build_log);
+    }
+
+    let mut final_expert_drafts = expert_drafts.clone();
+    
+    if !build_success && council.critique_rounds > 0 {
+        let mut critique_handles = Vec::new();
+        
+        for expert in &council.experts {
+            let expert = expert.clone();
+            let prompt = prompt.to_string();
+            let attachments = attachments.to_vec();
+            let history = history.to_vec();
+            let cb = callback.clone();
+            let build_log = build_log.clone();
+            let system_instructions = system_instructions.to_string();
+            
+            let other_drafts_str = expert_drafts.iter()
+                .filter(|(id, _)| id != &expert.id)
+                .map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            
+            let critique_prompt = format!(
+                "You are an expert panelist in coding agent mode. Here is the original user query: \"{}\"\n\nOther panel experts have generated the following initial drafts:\n\n{}\n\nIMPORTANT: The initial edits failed the build/test. Here is the build/compiler log output:\n{}\n\nPlease analyze these compiler or test errors, critique the other proposals, and output your updated and fully corrected code files using `<write_file path=\"relative/path/to/file\">` tags.",
+                prompt,
+                other_drafts_str,
+                build_log
+            );
+
+            let handle = RUNTIME.spawn(async move {
+                cb.on_expert_started(&format!("{}_critique", expert.id));
+                
+                struct CritiqueStreamProxy {
+                    expert_id: String,
+                    cb: Arc<dyn CodingCallback + 'static>,
+                    full_text: Mutex<String>,
+                }
+                
+                impl StreamCallback for CritiqueStreamProxy {
+                    fn on_chunk(&self, chunk: &str) {
+                        self.cb.on_expert_chunk(&self.expert_id, chunk);
+                        if let Ok(mut text) = self.full_text.lock() {
+                            text.push_str(chunk);
+                        }
+                    }
+                    fn on_error(&self, error: &str) {
+                        self.cb.on_expert_error(&self.expert_id, error);
+                    }
+                }
+                
+                let proxy = CritiqueStreamProxy {
+                    expert_id: format!("{}_critique", expert.id),
+                    cb: cb.clone(),
+                    full_text: Mutex::new(String::new()),
+                };
+                
+                let mut modified_expert = expert.clone();
+                modified_expert.system_prompt += &system_instructions;
+                
+                let provider = get_provider(&modified_expert.config.provider_type);
+                match provider.generate_stream(&critique_prompt, &attachments, &history, &modified_expert, &proxy).await {
+                    Ok(_) => {
+                        let full_response = {
+                            let text_lock = proxy.full_text.lock().unwrap();
+                            text_lock.clone()
+                        };
+                        cb.on_expert_completed(&format!("{}_critique", expert.id), &full_response);
+                        Ok((expert.id.clone(), full_response))
+                    }
+                    Err(e) => {
+                        cb.on_expert_error(&format!("{}_critique", expert.id), &e.to_string());
+                        Err(e)
+                    }
+                }
+            });
+            critique_handles.push(handle);
+        }
+
+        let mut revised_drafts = Vec::new();
+        for handle in critique_handles {
+            match handle.await {
+                Ok(Ok((expert_id, response))) => {
+                    revised_drafts.push((expert_id.clone(), response.clone()));
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Expert critique error: {:?}", e);
+                }
+                Err(e) => {
+                    eprintln!("Tokio task join error: {:?}", e);
+                }
+            }
+        }
+        
+        if !revised_drafts.is_empty() {
+            final_expert_drafts = revised_drafts;
+            
+            for (_expert_id, draft) in &final_expert_drafts {
+                let edits = parse_file_edits(draft);
+                for edit in edits {
+                    let full_file_path = std::path::Path::new(workspace_path).join(&edit.path);
+                    if let Some(parent) = full_file_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&full_file_path, &edit.content).is_ok() {
+                        callback.on_file_write(&edit.path);
+                    }
+                }
+            }
+            
+            if !build_command.trim().is_empty() && !workspace_path.trim().is_empty() {
+                callback.on_build_started(build_command);
+                let (success, log) = run_build_command(workspace_path, build_command);
+                build_success = success;
+                build_log = log;
+                callback.on_build_completed(success, &build_log);
+            }
+        }
+    }
+    
+    callback.on_chairman_started();
+    
+    let mut compiled_history = history.to_vec();
+    for (expert_id, draft) in &final_expert_drafts {
+        compiled_history.push(Message {
+            id: format!("msg_coding_draft_{}", expert_id),
+            role: Role::ExpertDraft { expert_id: expert_id.clone() },
+            content: draft.clone(),
+            timestamp: 0,
+        });
+    }
+    
+    let synthesis_prompt = format!(
+        "The original user query is: \"{}\"\n\nHere are the final code draft proposals generated by the active expert council:\n\n{}\n\nWorkspace build outcome (Success: {}):\n{}\n\nPlease synthesize a final, cohesive, and comprehensive report explaining the changes made, the build test results, and any recommendations.",
+        prompt,
+        final_expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n"),
+        build_success,
+        build_log
+    );
+    
+    struct ChairmanStreamProxy {
+        cb: Arc<dyn CodingCallback + 'static>,
+        full_text: Mutex<String>,
+    }
+    
+    impl StreamCallback for ChairmanStreamProxy {
+        fn on_chunk(&self, chunk: &str) {
+            self.cb.on_chairman_chunk(chunk);
+            if let Ok(mut text) = self.full_text.lock() {
+                text.push_str(chunk);
+            }
+        }
+        fn on_error(&self, error: &str) {
+            self.cb.on_chairman_error(error);
+        }
+    }
+    
+    let proxy = ChairmanStreamProxy {
+        cb: callback.clone(),
+        full_text: Mutex::new(String::new()),
+    };
+    
+    let chairman_provider = get_provider(&council.chairman.config.provider_type);
+    match chairman_provider.generate_stream(&synthesis_prompt, &[], &compiled_history, &council.chairman, &proxy).await {
+        Ok(_) => {
+            let final_response = {
+                let text_lock = proxy.full_text.lock().unwrap();
+                text_lock.clone()
+            };
+            callback.on_chairman_completed(&final_response);
+            Ok(final_response)
+        }
+        Err(e) => {
+            callback.on_chairman_error(&e.to_string());
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1164,5 +1524,16 @@ mod tests {
         assert_eq!(completed_crit.len(), 2);
         assert_eq!(started.contains(&"expert-1".to_string()), true);
         assert_eq!(started_crit.contains(&"expert-2".to_string()), true);
+    }
+
+    #[test]
+    fn test_parse_file_edits() {
+        let sample_text = "Some intro text.\n<write_file path=\"src/foo.rs\">\nfn foo() {}\n</write_file>\nOther text.\n<write_file path=\"tests/bar.rs\">\n#[test]\nfn bar() {}\n</write_file>\nTrailing text.";
+        let edits = parse_file_edits(sample_text);
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].path, "src/foo.rs");
+        assert_eq!(edits[0].content, "\nfn foo() {}\n");
+        assert_eq!(edits[1].path, "tests/bar.rs");
+        assert_eq!(edits[1].content, "\n#[test]\nfn bar() {}\n");
     }
 }

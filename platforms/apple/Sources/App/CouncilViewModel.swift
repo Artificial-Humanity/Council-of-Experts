@@ -29,7 +29,7 @@ struct CodableMessage: Codable, Identifiable {
     var attachedImagePaths: [String]?
 }
 
-class CouncilViewModel: ObservableObject, FfiCouncilCallback {
+class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback {
     @Published var expertStates: [String: ExpertState] = [:]
     @Published var chairmanText: String = ""
     @Published var chairmanStatus: String = "idle" // "idle", "synthesis", "completed", "error"
@@ -47,6 +47,19 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
     @Published var workspacePath: String = ""
     @Published var scannedFiles: [URL] = []
     @Published var selectedFilePaths: Set<String> = []
+    
+    // Coding Agent Mode Integration (Milestone 8)
+    @Published var isAgentCodingMode: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isAgentCodingMode, forKey: "isAgentCodingMode")
+        }
+    }
+    @Published var buildCommand: String = "" {
+        didSet {
+            UserDefaults.standard.set(buildCommand, forKey: "buildCommand")
+        }
+    }
+    @Published var buildStatusLog: String = ""
     
     // Multimodal Image Attachments (Milestone 6)
     @Published var attachedImages: [URL] = []
@@ -138,6 +151,12 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
             self.workspacePath = savedPath
             refreshFiles()
         }
+        
+        // Load coding agent properties
+        self.isAgentCodingMode = UserDefaults.standard.bool(forKey: "isAgentCodingMode")
+        if let savedBuildCmd = UserDefaults.standard.string(forKey: "buildCommand") {
+            self.buildCommand = savedBuildCmd
+        }
     }
     
     // ── Session Storage Helpers ──
@@ -181,6 +200,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         chairmanText = ""
         chairmanStatus = "idle"
         chairmanError = nil
+        buildStatusLog = ""
     }
     
     // ── Workspace Directory (Milestone 7) ──
@@ -296,6 +316,28 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         case "gif": return "image/gif"
         case "webp": return "image/webp"
         default: return "image/jpeg"
+        }
+    }
+    
+    // ── Coding Agent Callbacks (Milestone 8) ──
+    func onFileWrite(path: String) {
+        DispatchQueue.main.async {
+            self.buildStatusLog += "📁 Wrote file to workspace: \(path)\n"
+            self.refreshFiles() // Refresh indexed files view list
+        }
+    }
+    
+    func onBuildStarted(command: String) {
+        DispatchQueue.main.async {
+            self.buildStatusLog += "⚙️ Running workspace build command: \(command)...\n"
+        }
+    }
+    
+    func onBuildCompleted(success: Bool, output: String) {
+        DispatchQueue.main.async {
+            let statusEmoji = success ? "✅" : "❌"
+            self.buildStatusLog += "\(statusEmoji) Build finished (Success: \(success))\n"
+            self.buildStatusLog += "--- Output ---\n\(output)--------------\n\n"
         }
     }
     
@@ -490,6 +532,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         chairmanText = ""
         chairmanStatus = "idle"
         chairmanError = nil
+        buildStatusLog = ""
         
         // Dynamically build active FfiExperts based on activeExpertCount
         var activeExperts: [FfiExpert] = []
@@ -597,23 +640,50 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback {
         saveSession()
         prompt = "" // clear input box immediately
         
-        Task {
-            do {
-                _ = try await executeCouncilWorkflow(
-                    prompt: decoratedPrompt,
-                    attachments: ffiAttachments,
-                    history: ffiHistory,
-                    council: council,
-                    callback: self
-                )
-                DispatchQueue.main.async {
-                    self.isExecuting = false
+        if isAgentCodingMode {
+            buildStatusLog = "🚀 Initializing Multi-Source Coding Agent workflow...\n"
+            Task {
+                do {
+                    _ = try await executeCodingWorkflow(
+                        prompt: decoratedPrompt,
+                        workspacePath: workspacePath,
+                        buildCommand: buildCommand,
+                        attachments: ffiAttachments,
+                        history: ffiHistory,
+                        council: council,
+                        callback: self
+                    )
+                    DispatchQueue.main.async {
+                        self.isExecuting = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.isExecuting = false
+                        self.chairmanStatus = "error"
+                        self.chairmanError = error.localizedDescription
+                        self.buildStatusLog += "❌ Workflow Execution Error: \(error.localizedDescription)\n"
+                    }
                 }
-            } catch {
-                DispatchQueue.main.async {
-                    self.isExecuting = false
-                    self.chairmanStatus = "error"
-                    self.chairmanError = error.localizedDescription
+            }
+        } else {
+            Task {
+                do {
+                    _ = try await executeCouncilWorkflow(
+                        prompt: decoratedPrompt,
+                        attachments: ffiAttachments,
+                        history: ffiHistory,
+                        council: council,
+                        callback: self
+                    )
+                    DispatchQueue.main.async {
+                        self.isExecuting = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.isExecuting = false
+                        self.chairmanStatus = "error"
+                        self.chairmanError = error.localizedDescription
+                    }
                 }
             }
         }

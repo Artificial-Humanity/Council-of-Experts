@@ -302,3 +302,90 @@ pub async fn execute_council_workflow(
         .await
         .map_err(map_error)
 }
+
+#[uniffi::export(callback_interface)]
+pub trait FfiCodingCallback: Send + Sync {
+    fn on_expert_started(&self, expert_id: String);
+    fn on_expert_chunk(&self, expert_id: String, chunk: String);
+    fn on_expert_completed(&self, expert_id: String, full_response: String);
+    fn on_expert_error(&self, expert_id: String, error: String);
+
+    fn on_file_write(&self, path: String);
+    fn on_build_started(&self, command: String);
+    fn on_build_completed(&self, success: bool, output: String);
+
+    fn on_chairman_started(&self);
+    fn on_chairman_chunk(&self, chunk: String);
+    fn on_chairman_completed(&self, full_response: String);
+    fn on_chairman_error(&self, error: String);
+}
+
+pub struct FfiCodingCallbackProxy {
+    pub callback: Box<dyn FfiCodingCallback>,
+}
+
+impl core::CodingCallback for FfiCodingCallbackProxy {
+    fn on_expert_started(&self, expert_id: &str) {
+        self.callback.on_expert_started(expert_id.to_string());
+    }
+    fn on_expert_chunk(&self, expert_id: &str, chunk: &str) {
+        self.callback.on_expert_chunk(expert_id.to_string(), chunk.to_string());
+    }
+    fn on_expert_completed(&self, expert_id: &str, full_response: &str) {
+        self.callback.on_expert_completed(expert_id.to_string(), full_response.to_string());
+    }
+    fn on_expert_error(&self, expert_id: &str, error: &str) {
+        self.callback.on_expert_error(expert_id.to_string(), error.to_string());
+    }
+
+    fn on_file_write(&self, path: &str) {
+        self.callback.on_file_write(path.to_string());
+    }
+    fn on_build_started(&self, command: &str) {
+        self.callback.on_build_started(command.to_string());
+    }
+    fn on_build_completed(&self, success: bool, output: &str) {
+        self.callback.on_build_completed(success, output.to_string());
+    }
+
+    fn on_chairman_started(&self) {
+        self.callback.on_chairman_started();
+    }
+    fn on_chairman_chunk(&self, chunk: &str) {
+        self.callback.on_chairman_chunk(chunk.to_string());
+    }
+    fn on_chairman_completed(&self, full_response: &str) {
+        self.callback.on_chairman_completed(full_response.to_string());
+    }
+    fn on_chairman_error(&self, error: &str) {
+        self.callback.on_chairman_error(error.to_string());
+    }
+}
+
+#[uniffi::export]
+pub async fn execute_coding_workflow(
+    prompt: String,
+    workspace_path: String,
+    build_command: String,
+    attachments: Vec<FfiAttachment>,
+    history: Vec<FfiMessage>,
+    council: FfiCouncil,
+    callback: Box<dyn FfiCodingCallback>,
+) -> Result<String, FfiPanelError> {
+    let core_council = map_council(council);
+    let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
+    let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
+    let proxy = Arc::new(FfiCodingCallbackProxy { callback });
+
+    core::run_agent_coding_flow(
+        &prompt,
+        &workspace_path,
+        &build_command,
+        &core_attachments,
+        &core_history,
+        &core_council,
+        proxy,
+    )
+    .await
+    .map_err(map_error)
+}
