@@ -162,7 +162,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
     // ── Session Storage Helpers ──
     private var sessionURL: URL {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let supportDir = paths[0].appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+        let supportDir = paths[0].appendingPathComponent("io.artificialhumanity.council-of-experts", isDirectory: true)
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true, attributes: nil)
         return supportDir.appendingPathComponent("active_session.json")
     }
@@ -193,7 +193,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         // Clean staging attachments folder
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
         let attachmentsDir = paths[0]
-            .appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+            .appendingPathComponent("io.artificialhumanity.council-of-experts", isDirectory: true)
             .appendingPathComponent("attachments", isDirectory: true)
         try? FileManager.default.removeItem(at: attachmentsDir)
         
@@ -295,7 +295,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
     private func copyImageToStaging(_ url: URL) -> URL? {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
         let attachmentsDir = paths[0]
-            .appendingPathComponent("technology.mcfarlin.council-of-experts", isDirectory: true)
+            .appendingPathComponent("io.artificialhumanity.council-of-experts", isDirectory: true)
             .appendingPathComponent("attachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: attachmentsDir, withIntermediateDirectories: true)
         

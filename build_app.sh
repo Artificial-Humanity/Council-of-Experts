@@ -35,7 +35,7 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundleExecutable</key>
     <string>CouncilOfExpertsApp</string>
     <key>CFBundleIdentifier</key>
-    <string>technology.mcfarlin.council-of-experts</string>
+    <string>io.artificialhumanity.council-of-experts</string>
     <key>CFBundleName</key>
     <string>Council of Experts</string>
     <key>CFBundlePackageType</key>

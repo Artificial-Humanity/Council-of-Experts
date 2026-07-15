@@ -4,7 +4,7 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleExecutable</key><string>council_of_experts_ffiFFI</string>
-    <key>CFBundleIdentifier</key><string>technology.mcfarlin.council_of_experts_ffiFFI</string>
+    <key>CFBundleIdentifier</key><string>io.artificialhumanity.council_of_experts_ffiFFI</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>council_of_experts_ffiFFI</string>
     <key>CFBundlePackageType</key><string>FMWK</string>
