@@ -449,7 +449,7 @@ struct ContentView: View {
                                         Image(systemName: "paperplane.fill")
                                         Text("Send")
                                     }
-                                    .frame(width: 80)
+                                    .frame(width: 100)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.purple)
@@ -459,11 +459,15 @@ struct ContentView: View {
                             Button(action: {
                                 viewModel.clearHistory()
                             }) {
-                                Text("Clear")
-                                    .frame(width: 80)
+                                HStack {
+                                    Image(systemName: "trash")
+                                    Text("Clear Chat")
+                                }
+                                .frame(width: 100)
                             }
                             .buttonStyle(.bordered)
                             .disabled(viewModel.isExecuting)
+                            .help("Clear the conversation and reset the drafting grid")
                         }
                     }
                     .padding()
@@ -652,13 +656,45 @@ struct ChatBubble: View {
                     .cornerRadius(12)
                 }
                 .frame(maxWidth: 600, alignment: .trailing)
+            } else if msg.role == "expert-draft" || msg.role == "expert-critique" {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: msg.role == "expert-critique" ? "arrow.triangle.2.circlepath" : "person.fill")
+                            .foregroundColor(.blue)
+                            .font(.caption2)
+                        Text(msg.speakerName ?? "Expert")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                        Text(msg.role == "expert-critique" ? "Critique & Revision" : "Draft")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.blue.opacity(0.12))
+                            .cornerRadius(4)
+                    }
+                    Text(msg.content)
+                        .lineSpacing(3)
+                        .padding(12)
+                        .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+                        .cornerRadius(12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.blue.opacity(0.15), lineWidth: 1)
+                        )
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: 700, alignment: .leading)
+                Spacer()
             } else {
+                // "chairman" (and legacy "assistant" sessions)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Image(systemName: "crown.fill")
                             .foregroundColor(Color.amber)
                             .font(.caption2)
-                        Text("Gaston (Chairman)")
+                        Text(msg.speakerName ?? "Gaston (Chairman)")
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)

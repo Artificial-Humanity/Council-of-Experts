@@ -23,10 +23,11 @@ struct ExpertConfigInput {
 
 struct CodableMessage: Codable, Identifiable {
     var id: String
-    var role: String // "user", "assistant"
+    var role: String // "user", "expert-draft", "expert-critique", "chairman" (legacy sessions may have "assistant")
     var content: String
     var timestamp: UInt64
     var attachedImagePaths: [String]?
+    var speakerName: String? // display name for expert-draft/expert-critique bubbles
 }
 
 class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback {
@@ -201,6 +202,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         chairmanStatus = "idle"
         chairmanError = nil
         buildStatusLog = ""
+        expertStates.removeAll()
     }
     
     // ── Workspace Directory (Milestone 7) ──
@@ -368,6 +370,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                 state.status = "completed"
                 state.response = fullResponse
                 self.expertStates[expertId] = state
+
+                self.messages.append(CodableMessage(
+                    id: UUID().uuidString,
+                    role: "expert-draft",
+                    content: fullResponse,
+                    timestamp: UInt64(Date().timeIntervalSince1970),
+                    speakerName: state.name
+                ))
+                self.saveSession()
             }
         }
     }
@@ -409,6 +420,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                 state.critiqueStatus = "completed"
                 state.critiqueResponse = fullCritique
                 self.expertStates[expertId] = state
+
+                self.messages.append(CodableMessage(
+                    id: UUID().uuidString,
+                    role: "expert-critique",
+                    content: fullCritique,
+                    timestamp: UInt64(Date().timeIntervalSince1970),
+                    speakerName: state.name
+                ))
+                self.saveSession()
             }
         }
     }
@@ -443,14 +463,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             self.chairmanStatus = "completed"
             self.chairmanText = fullResponse
             
-            // Append Gaston's finalized synthesized answer to chat log
-            let assistantMsg = CodableMessage(
+            // Append the Chairman's finalized synthesized answer to chat log
+            let chairmanMsg = CodableMessage(
                 id: UUID().uuidString,
-                role: "assistant",
+                role: "chairman",
                 content: fullResponse,
-                timestamp: UInt64(Date().timeIntervalSince1970)
+                timestamp: UInt64(Date().timeIntervalSince1970),
+                speakerName: self.chairmanConfig.name.isEmpty ? "Chairman" : self.chairmanConfig.name
             )
-            self.messages.append(assistantMsg)
+            self.messages.append(chairmanMsg)
             self.saveSession()
         }
     }
