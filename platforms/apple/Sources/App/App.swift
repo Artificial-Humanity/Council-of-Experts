@@ -26,6 +26,7 @@ struct SettingsView: View {
     @AppStorage("geminiKey") private var geminiKey = ""
     @AppStorage("grokKey") private var grokKey = ""
     @AppStorage("maxResponseWords") private var maxResponseWords = 300
+    @AppStorage("enableThinkingNotes") private var enableThinkingNotes = false
 
     var body: some View {
         Form {
@@ -84,9 +85,24 @@ struct SettingsView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
                 }
+
+                Divider()
+
+                Text("Thinking Notes")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Request thinking/reasoning notes", isOn: $enableThinkingNotes)
+                        .font(.caption)
+
+                    Text("Shown in each expert's diagnostic pane, not the main chat. Only Anthropic (extended thinking) and Gemini (thought summaries) currently return these; other providers show nothing. Anthropic's extended thinking also uses more output tokens and adds latency.")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
         }
-        .frame(width: 450, height: 420)
+        .frame(width: 450, height: 500)
     }
 }

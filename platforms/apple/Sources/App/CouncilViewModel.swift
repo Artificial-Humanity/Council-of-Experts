@@ -8,8 +8,10 @@ struct ExpertState {
     var name: String
     var status: String // "idle", "drafting", "completed", "error"
     var response: String
+    var thinking: String = "" // reasoning trace for the opening round, if the provider returned any
     var critiqueStatus: String // "idle", "drafting", "completed", "error"
     var critiqueResponse: String
+    var critiqueThinking: String = "" // reasoning trace for the most recent later round
     var error: String?
 }
 
@@ -364,12 +366,13 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             if var state = self.expertStates[expertId] {
                 state.status = "drafting"
                 state.response = ""
+                state.thinking = ""
                 state.error = nil
                 self.expertStates[expertId] = state
             }
         }
     }
-    
+
     func onExpertChunk(expertId: String, chunk: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
@@ -378,7 +381,16 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             }
         }
     }
-    
+
+    func onExpertThinkingChunk(expertId: String, chunk: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.thinking += chunk
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+
     func onExpertCompleted(expertId: String, fullResponse: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
@@ -415,6 +427,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             if var state = self.expertStates[expertId] {
                 state.critiqueStatus = "drafting"
                 state.critiqueResponse = ""
+                state.critiqueThinking = ""
                 state.error = nil
                 self.expertStates[expertId] = state
             }
@@ -425,6 +438,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
                 state.critiqueResponse += chunk
+                self.expertStates[expertId] = state
+            }
+        }
+    }
+
+    func onExpertCritiqueThinkingChunk(expertId: String, roundNumber: UInt32, chunk: String) {
+        DispatchQueue.main.async {
+            if var state = self.expertStates[expertId] {
+                state.critiqueThinking += chunk
                 self.expertStates[expertId] = state
             }
         }
@@ -536,12 +558,14 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             modelName: resolved.modelName,
             baseUrl: resolved.baseUrl,
             apiKey: resolved.apiKey,
-            temperature: nil
+            temperature: nil,
+            enableThinking: false
         )
     }
 
     private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput) -> FfiExpert {
         let resolved = CouncilViewModel.resolveProviderDetails(providerType: input.providerType, modelName: input.modelName, baseUrl: input.baseUrl)
+        let enableThinking = UserDefaults.standard.bool(forKey: "enableThinkingNotes")
 
         return FfiExpert(
             id: id,
@@ -552,7 +576,8 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                 modelName: resolved.modelName,
                 baseUrl: resolved.baseUrl,
                 apiKey: resolved.apiKey,
-                temperature: 0.7
+                temperature: 0.7,
+                enableThinking: enableThinking
             ),
             systemPrompt: input.systemPrompt
         )

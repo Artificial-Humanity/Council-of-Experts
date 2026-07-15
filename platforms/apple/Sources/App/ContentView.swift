@@ -847,41 +847,50 @@ struct ExpertCardView: View {
             Divider()
 
             ScrollView {
-                if selectedTab == 0 {
-                    // Display Initial Draft
-                    if let err = state.error, state.status == "error" {
-                        Text("Draft Error: \(err)")
-                            .foregroundColor(.red)
-                            .font(.caption2)
-                    } else if state.response.isEmpty {
-                        Text(state.status == "drafting" ? "Initiating draft stream..." : "Awaiting user query...")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 9))
-                            .italic()
+                VStack(alignment: .leading, spacing: 4) {
+                    if selectedTab == 0 {
+                        if !state.thinking.isEmpty {
+                            ThinkingNoteView(text: state.thinking)
+                        }
+                        // Display Initial Draft
+                        if let err = state.error, state.status == "error" {
+                            Text("Draft Error: \(err)")
+                                .foregroundColor(.red)
+                                .font(.caption2)
+                        } else if state.response.isEmpty {
+                            Text(state.status == "drafting" ? "Initiating draft stream..." : "Awaiting user query...")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 9))
+                                .italic()
+                        } else {
+                            Text(state.response)
+                                .font(.system(size: 9, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                     } else {
-                        Text(state.response)
-                            .font(.system(size: 9, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                } else {
-                    // Display the most recent round's output
-                    if let err = state.error, state.critiqueStatus == "error" {
-                        Text("Round Error: \(err)")
-                            .foregroundColor(.red)
-                            .font(.caption2)
-                    } else if state.critiqueResponse.isEmpty {
-                        Text(state.critiqueStatus == "drafting" ? "Streaming..." : "Awaiting opening statements...")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 9))
-                            .italic()
-                    } else {
-                        Text(state.critiqueResponse)
-                            .font(.system(size: 9, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                        if !state.critiqueThinking.isEmpty {
+                            ThinkingNoteView(text: state.critiqueThinking)
+                        }
+                        // Display the most recent round's output
+                        if let err = state.error, state.critiqueStatus == "error" {
+                            Text("Round Error: \(err)")
+                                .foregroundColor(.red)
+                                .font(.caption2)
+                        } else if state.critiqueResponse.isEmpty {
+                            Text(state.critiqueStatus == "drafting" ? "Streaming..." : "Awaiting opening statements...")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 9))
+                                .italic()
+                        } else {
+                            Text(state.critiqueResponse)
+                                .font(.system(size: 9, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 44)
         }
@@ -915,6 +924,41 @@ extension View {
                     selectedTab.wrappedValue = 1
                 }
             }
+    }
+}
+
+// Collapsed-by-default reasoning trace, shown above a round's response when the provider
+// returned one (Anthropic extended thinking, Gemini thought summaries).
+struct ThinkingNoteView: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button(action: { isExpanded.toggle() }) {
+                HStack(spacing: 3) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 7))
+                    Image(systemName: "brain")
+                        .font(.system(size: 8))
+                    Text("Thinking")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundColor(.purple.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(text)
+                    .font(.system(size: 9, design: .monospaced))
+                    .italic()
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.leading, 10)
+            }
+        }
+        .padding(.bottom, 2)
     }
 }
 

@@ -22,6 +22,7 @@ pub struct FfiProviderConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub temperature: Option<f32>,
+    pub enable_thinking: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -105,11 +106,13 @@ impl core::StreamCallback for FfiCallbackProxy {
 pub trait FfiCouncilCallback: Send + Sync {
     fn on_expert_started(&self, expert_id: String);
     fn on_expert_chunk(&self, expert_id: String, chunk: String);
+    fn on_expert_thinking_chunk(&self, expert_id: String, chunk: String);
     fn on_expert_completed(&self, expert_id: String, full_response: String);
     fn on_expert_error(&self, expert_id: String, error: String);
-    
+
     fn on_expert_critique_started(&self, expert_id: String, round_number: u32, is_final_round: bool);
     fn on_expert_critique_chunk(&self, expert_id: String, round_number: u32, chunk: String);
+    fn on_expert_critique_thinking_chunk(&self, expert_id: String, round_number: u32, chunk: String);
     fn on_expert_critique_completed(&self, expert_id: String, round_number: u32, is_final_round: bool, full_critique: String);
     fn on_expert_critique_error(&self, expert_id: String, round_number: u32, error: String);
 
@@ -130,6 +133,9 @@ impl core::CouncilCallback for FfiCouncilCallbackProxy {
     fn on_expert_chunk(&self, expert_id: &str, chunk: &str) {
         self.callback.on_expert_chunk(expert_id.to_string(), chunk.to_string());
     }
+    fn on_expert_thinking_chunk(&self, expert_id: &str, chunk: &str) {
+        self.callback.on_expert_thinking_chunk(expert_id.to_string(), chunk.to_string());
+    }
     fn on_expert_completed(&self, expert_id: &str, full_response: &str) {
         self.callback.on_expert_completed(expert_id.to_string(), full_response.to_string());
     }
@@ -142,6 +148,9 @@ impl core::CouncilCallback for FfiCouncilCallbackProxy {
     }
     fn on_expert_critique_chunk(&self, expert_id: &str, round_number: u32, chunk: &str) {
         self.callback.on_expert_critique_chunk(expert_id.to_string(), round_number, chunk.to_string());
+    }
+    fn on_expert_critique_thinking_chunk(&self, expert_id: &str, round_number: u32, chunk: &str) {
+        self.callback.on_expert_critique_thinking_chunk(expert_id.to_string(), round_number, chunk.to_string());
     }
     fn on_expert_critique_completed(&self, expert_id: &str, round_number: u32, is_final_round: bool, full_critique: &str) {
         self.callback.on_expert_critique_completed(expert_id.to_string(), round_number, is_final_round, full_critique.to_string());
@@ -184,6 +193,7 @@ fn map_provider_config(pc: FfiProviderConfig) -> core::ProviderConfig {
         base_url: pc.base_url,
         api_key: pc.api_key,
         temperature: pc.temperature,
+        enable_thinking: pc.enable_thinking,
     }
 }
 

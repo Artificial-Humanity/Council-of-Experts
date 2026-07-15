@@ -42,6 +42,9 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub temperature: Option<f32>,
+    // Requests reasoning/thinking traces where the provider supports it (Anthropic extended
+    // thinking, Gemini thought summaries). Best-effort elsewhere; has no effect if unsupported.
+    pub enable_thinking: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,17 +96,22 @@ pub struct Council {
 
 pub trait StreamCallback: Send + Sync {
     fn on_chunk(&self, chunk: &str);
+    // Default no-op: only Anthropic/Gemini clients currently emit this, when the request
+    // opted into thinking/reasoning traces and the provider actually returned any.
+    fn on_thinking_chunk(&self, _chunk: &str) {}
     fn on_error(&self, error: &str);
 }
 
 pub trait CouncilCallback: Send + Sync {
     fn on_expert_started(&self, expert_id: &str);
     fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
+    fn on_expert_thinking_chunk(&self, expert_id: &str, chunk: &str);
     fn on_expert_completed(&self, expert_id: &str, full_response: &str);
     fn on_expert_error(&self, expert_id: &str, error: &str);
 
     fn on_expert_critique_started(&self, expert_id: &str, round_number: u32, is_final_round: bool);
     fn on_expert_critique_chunk(&self, expert_id: &str, round_number: u32, chunk: &str);
+    fn on_expert_critique_thinking_chunk(&self, expert_id: &str, round_number: u32, chunk: &str);
     fn on_expert_critique_completed(&self, expert_id: &str, round_number: u32, is_final_round: bool, full_critique: &str);
     fn on_expert_critique_error(&self, expert_id: &str, round_number: u32, error: &str);
 
@@ -345,6 +353,11 @@ impl LlmProvider for OpenAiCompatibleClient {
                         if let Some(delta) = val["choices"][0]["delta"]["content"].as_str() {
                             callback.on_chunk(delta);
                         }
+                        // Some OpenAI-compatible backends (xAI reasoning models, DeepSeek-style
+                        // APIs, some local servers) stream reasoning separately in this field.
+                        if let Some(thinking) = val["choices"][0]["delta"]["reasoning_content"].as_str() {
+                            callback.on_thinking_chunk(thinking);
+                        }
                     }
                 }
             }
@@ -420,12 +433,14 @@ impl LlmProvider for AnthropicClient {
             "content": user_content
         }));
 
+        // Temperature is intentionally omitted: several newer model aliases (e.g.
+        // claude-opus-4-8, claude-sonnet-5) reject it outright with a 400, and this app
+        // never exposed temperature as a user-configurable setting anyway.
         let body = serde_json::json!({
             "model": expert.config.model_name,
             "max_tokens": 4096,
             "system": expert.system_prompt,
             "messages": messages,
-            "temperature": expert.config.temperature.unwrap_or(0.7),
             "stream": false
         });
 
@@ -511,14 +526,24 @@ impl LlmProvider for AnthropicClient {
             "content": user_content
         }));
 
-        let body = serde_json::json!({
+        // Temperature is intentionally omitted (see the comment in `generate` above); it's
+        // also disallowed by Anthropic when extended thinking is enabled.
+        let mut body = serde_json::json!({
             "model": expert.config.model_name,
             "max_tokens": 4096,
             "system": expert.system_prompt,
             "messages": messages,
-            "temperature": expert.config.temperature.unwrap_or(0.7),
             "stream": true
         });
+
+        if expert.config.enable_thinking {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": 4096
+            });
+            // Extended thinking needs room to think plus room to answer.
+            body["max_tokens"] = serde_json::json!(8192);
+        }
 
         let res = self.client.post(url)
             .headers(headers)
@@ -556,6 +581,8 @@ impl LlmProvider for AnthropicClient {
                             if event_type == "content_block_delta" {
                                 if let Some(delta) = val["delta"]["text"].as_str() {
                                     callback.on_chunk(delta);
+                                } else if let Some(thinking) = val["delta"]["thinking"].as_str() {
+                                    callback.on_thinking_chunk(thinking);
                                 }
                             } else if event_type == "message_stop" {
                                 break;
@@ -702,14 +729,21 @@ impl LlmProvider for GeminiClient {
             "parts": user_parts
         }));
 
+        let mut generation_config = serde_json::json!({
+            "temperature": expert.config.temperature.unwrap_or(0.7)
+        });
+        if expert.config.enable_thinking {
+            generation_config["thinkingConfig"] = serde_json::json!({
+                "includeThoughts": true
+            });
+        }
+
         let body = serde_json::json!({
             "contents": contents,
             "systemInstruction": {
                 "parts": [{"text": expert.system_prompt}]
             },
-            "generationConfig": {
-                "temperature": expert.config.temperature.unwrap_or(0.7)
-            }
+            "generationConfig": generation_config
         });
 
         let res = self.client.post(&url)
@@ -725,6 +759,22 @@ impl LlmProvider for GeminiClient {
             return Err(PanelError::ApiError(format!("Gemini stream response status: {}, body: {}", status, err_text)));
         }
 
+        // A candidate's content can hold several parts when thinking is enabled: "thought"
+        // parts carry reasoning, everything else is the actual answer.
+        fn dispatch_gemini_parts(item: &serde_json::Value, callback: &(dyn StreamCallback + 'static)) {
+            if let Some(parts) = item["candidates"][0]["content"]["parts"].as_array() {
+                for part in parts {
+                    if let Some(text) = part["text"].as_str() {
+                        if part["thought"].as_bool() == Some(true) {
+                            callback.on_thinking_chunk(text);
+                        } else {
+                            callback.on_chunk(text);
+                        }
+                    }
+                }
+            }
+        }
+
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
 
@@ -738,19 +788,15 @@ impl LlmProvider for GeminiClient {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if let Some(arr) = val.as_array() {
                         for item in arr {
-                            if let Some(delta) = item["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                                callback.on_chunk(delta);
-                            }
+                            dispatch_gemini_parts(item, callback);
                         }
                         buffer.clear();
                     }
                 }
             } else if trimmed.starts_with('{') && trimmed.ends_with('}') {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(delta) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        callback.on_chunk(delta);
-                        buffer.clear();
-                    }
+                    dispatch_gemini_parts(&val, callback);
+                    buffer.clear();
                 }
             } else {
                 while let Some(delimiter_idx) = buffer.find("\n") {
@@ -758,9 +804,7 @@ impl LlmProvider for GeminiClient {
                     let line_trimmed = line.trim().trim_matches(',');
                     if line_trimmed.starts_with('{') && line_trimmed.ends_with('}') {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line_trimmed) {
-                            if let Some(delta) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                                callback.on_chunk(delta);
-                            }
+                            dispatch_gemini_parts(&val, callback);
                         }
                     }
                 }
@@ -794,6 +838,9 @@ impl LlmProvider for MockProvider {
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
+        if expert.config.enable_thinking {
+            callback.on_thinking_chunk(&format!("Mock reasoning trace from {}...", expert.name));
+        }
         if prompt.contains("Other panel experts have generated") {
             callback.on_chunk(&format!("Mock critique and revised draft from {}", expert.name));
         } else {
@@ -972,6 +1019,13 @@ where
                     }
                     if let Ok(mut text) = self.full_text.lock() {
                         text.push_str(chunk);
+                    }
+                }
+                fn on_thinking_chunk(&self, chunk: &str) {
+                    if self.is_opening {
+                        self.cb.on_expert_thinking_chunk(&self.expert_id, chunk);
+                    } else {
+                        self.cb.on_expert_critique_thinking_chunk(&self.expert_id, self.round_number, chunk);
                     }
                 }
                 fn on_error(&self, error: &str) {
@@ -1534,6 +1588,7 @@ mod tests {
         fn on_expert_chunk(&self, _expert_id: &str, chunk: &str) {
             self.chunks.lock().unwrap().push(chunk.to_string());
         }
+        fn on_expert_thinking_chunk(&self, _expert_id: &str, _chunk: &str) {}
         fn on_expert_completed(&self, expert_id: &str, _full_response: &str) {
             self.completed_experts.lock().unwrap().push(expert_id.to_string());
         }
@@ -1545,6 +1600,7 @@ mod tests {
         fn on_expert_critique_chunk(&self, _expert_id: &str, _round_number: u32, chunk: &str) {
             self.chunks.lock().unwrap().push(chunk.to_string());
         }
+        fn on_expert_critique_thinking_chunk(&self, _expert_id: &str, _round_number: u32, _chunk: &str) {}
         fn on_expert_critique_completed(&self, expert_id: &str, _round_number: u32, _is_final_round: bool, _full_critique: &str) {
             self.completed_critiques.lock().unwrap().push(expert_id.to_string());
         }
@@ -1581,6 +1637,7 @@ mod tests {
             base_url: None,
             api_key: None,
             temperature: None,
+            enable_thinking: false,
         };
 
         let council = Council {

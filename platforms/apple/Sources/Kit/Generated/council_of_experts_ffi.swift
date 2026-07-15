@@ -795,16 +795,18 @@ public struct FfiProviderConfig {
     public var baseUrl: String?
     public var apiKey: String?
     public var temperature: Float?
+    public var enableThinking: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, providerType: FfiProviderType, modelName: String, baseUrl: String?, apiKey: String?, temperature: Float?) {
+    public init(name: String, providerType: FfiProviderType, modelName: String, baseUrl: String?, apiKey: String?, temperature: Float?, enableThinking: Bool) {
         self.name = name
         self.providerType = providerType
         self.modelName = modelName
         self.baseUrl = baseUrl
         self.apiKey = apiKey
         self.temperature = temperature
+        self.enableThinking = enableThinking
     }
 }
 
@@ -830,6 +832,9 @@ extension FfiProviderConfig: Equatable, Hashable {
         if lhs.temperature != rhs.temperature {
             return false
         }
+        if lhs.enableThinking != rhs.enableThinking {
+            return false
+        }
         return true
     }
 
@@ -840,6 +845,7 @@ extension FfiProviderConfig: Equatable, Hashable {
         hasher.combine(baseUrl)
         hasher.combine(apiKey)
         hasher.combine(temperature)
+        hasher.combine(enableThinking)
     }
 }
 
@@ -853,7 +859,8 @@ public struct FfiConverterTypeFfiProviderConfig: FfiConverterRustBuffer {
                 modelName: FfiConverterString.read(from: &buf), 
                 baseUrl: FfiConverterOptionString.read(from: &buf), 
                 apiKey: FfiConverterOptionString.read(from: &buf), 
-                temperature: FfiConverterOptionFloat.read(from: &buf)
+                temperature: FfiConverterOptionFloat.read(from: &buf), 
+                enableThinking: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -864,6 +871,7 @@ public struct FfiConverterTypeFfiProviderConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.baseUrl, into: &buf)
         FfiConverterOptionString.write(value.apiKey, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
+        FfiConverterBool.write(value.enableThinking, into: &buf)
     }
 }
 
@@ -1481,6 +1489,8 @@ public protocol FfiCouncilCallback : AnyObject {
     
     func onExpertChunk(expertId: String, chunk: String) 
     
+    func onExpertThinkingChunk(expertId: String, chunk: String) 
+    
     func onExpertCompleted(expertId: String, fullResponse: String) 
     
     func onExpertError(expertId: String, error: String) 
@@ -1488,6 +1498,8 @@ public protocol FfiCouncilCallback : AnyObject {
     func onExpertCritiqueStarted(expertId: String, roundNumber: UInt32, isFinalRound: Bool) 
     
     func onExpertCritiqueChunk(expertId: String, roundNumber: UInt32, chunk: String) 
+    
+    func onExpertCritiqueThinkingChunk(expertId: String, roundNumber: UInt32, chunk: String) 
     
     func onExpertCritiqueCompleted(expertId: String, roundNumber: UInt32, isFinalRound: Bool, fullCritique: String) 
     
@@ -1548,6 +1560,32 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onExpertChunk(
+                     expertId: try FfiConverterString.lift(expertId),
+                     chunk: try FfiConverterString.lift(chunk)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onExpertThinkingChunk: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            chunk: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertThinkingChunk(
                      expertId: try FfiConverterString.lift(expertId),
                      chunk: try FfiConverterString.lift(chunk)
                 )
@@ -1655,6 +1693,34 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onExpertCritiqueChunk(
+                     expertId: try FfiConverterString.lift(expertId),
+                     roundNumber: try FfiConverterUInt32.lift(roundNumber),
+                     chunk: try FfiConverterString.lift(chunk)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onExpertCritiqueThinkingChunk: { (
+            uniffiHandle: UInt64,
+            expertId: RustBuffer,
+            roundNumber: UInt32,
+            chunk: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCouncilCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onExpertCritiqueThinkingChunk(
                      expertId: try FfiConverterString.lift(expertId),
                      roundNumber: try FfiConverterUInt32.lift(roundNumber),
                      chunk: try FfiConverterString.lift(chunk)
@@ -2316,34 +2382,40 @@ private var initializationResult: InitializationResult {
     if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_chunk() != 27650) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_completed() != 33618) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_thinking_chunk() != 35929) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_error() != 48180) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_completed() != 47078) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_started() != 55042) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_error() != 53791) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_chunk() != 4548) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_started() != 44454) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_completed() != 62672) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_chunk() != 62971) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_error() != 14886) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_thinking_chunk() != 37092) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_started() != 13278) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_completed() != 17052) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_chunk() != 59309) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_error() != 12014) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_completed() != 24569) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_started() != 48876) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_error() != 5129) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_chunk() != 56465) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_completed() != 6714) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_error() != 49220) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_method_ffistreamcallback_on_chunk() != 2622) {
