@@ -25,7 +25,7 @@ struct ExpertConfigInput {
 
 struct CodableMessage: Codable, Identifiable {
     var id: String
-    var role: String // "user", "expert-draft", "expert-critique", "chairman" (legacy sessions may have "assistant")
+    var role: String // "user", "expert-draft", "expert-critique" (legacy sessions may have "chairman" or "assistant")
     var content: String
     var timestamp: UInt64
     var attachedImagePaths: [String]?
@@ -35,9 +35,8 @@ struct CodableMessage: Codable, Identifiable {
 
 class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback {
     @Published var expertStates: [String: ExpertState] = [:]
-    @Published var chairmanText: String = ""
-    @Published var chairmanStatus: String = "idle" // "idle", "synthesis", "completed", "error"
-    @Published var chairmanError: String?
+    // Top-level errors not tied to any single expert (e.g. a failure before any expert starts).
+    @Published var executionError: String?
     @Published var isExecuting: Bool = false
     @Published var prompt: String = ""
     
@@ -143,14 +142,6 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         )
     ]
     
-    @Published var chairmanConfig = ExpertConfigInput(
-        name: "Gaston (Chairman)",
-        providerType: "Mock Sandbox",
-        modelName: "mock-chairman",
-        baseUrl: "http://localhost:11434/v1",
-        systemPrompt: "You are Gaston, the Chairman of the Council. Review the expert proposals and critiques, then synthesize them into a clean, complete response."
-    )
-    
     init() {
         loadSession()
         
@@ -215,9 +206,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             .appendingPathComponent("attachments", isDirectory: true)
         try? FileManager.default.removeItem(at: attachmentsDir)
         
-        chairmanText = ""
-        chairmanStatus = "idle"
-        chairmanError = nil
+        executionError = nil
         buildStatusLog = ""
         expertStates.removeAll()
     }
@@ -482,46 +471,6 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         }
     }
     
-    // ── Chairman Synthesis Callbacks ──
-    func onChairmanStarted() {
-        DispatchQueue.main.async {
-            self.chairmanStatus = "synthesis"
-            self.chairmanText = ""
-            self.chairmanError = nil
-        }
-    }
-    
-    func onChairmanChunk(chunk: String) {
-        DispatchQueue.main.async {
-            self.chairmanText += chunk
-        }
-    }
-    
-    func onChairmanCompleted(fullResponse: String) {
-        DispatchQueue.main.async {
-            self.chairmanStatus = "completed"
-            self.chairmanText = fullResponse
-            
-            // Append the Chairman's finalized synthesized answer to chat log
-            let chairmanMsg = CodableMessage(
-                id: UUID().uuidString,
-                role: "chairman",
-                content: fullResponse,
-                timestamp: UInt64(Date().timeIntervalSince1970),
-                speakerName: self.chairmanConfig.name.isEmpty ? "Chairman" : self.chairmanConfig.name
-            )
-            self.messages.append(chairmanMsg)
-            self.saveSession()
-        }
-    }
-    
-    func onChairmanError(error: String) {
-        DispatchQueue.main.async {
-            self.chairmanStatus = "error"
-            self.chairmanError = error
-        }
-    }
-    
     // Resolves an app-facing provider type string into the FFI provider type,
     // effective model name, stored API key, and effective base URL. Shared by
     // request building and by the "fetch available models" probe so the two
@@ -587,9 +536,7 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         isExecuting = true
-        chairmanText = ""
-        chairmanStatus = "idle"
-        chairmanError = nil
+        executionError = nil
         buildStatusLog = ""
         
         // Dynamically build active FfiExperts based on activeExpertCount
@@ -617,12 +564,6 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             )
         }
         
-        let chairman = buildFfiExpert(
-            id: "chairman-gem",
-            defaultName: chairmanConfig.name.isEmpty ? "Chairman Gaston" : chairmanConfig.name,
-            input: chairmanConfig
-        )
-        
         let storedMaxWords = UserDefaults.standard.object(forKey: "maxResponseWords") as? Int
         let maxResponseWords = max(100, storedMaxWords ?? 300)
 
@@ -630,7 +571,6 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             id: "panel-development",
             name: "Software Architecture Council",
             experts: activeExperts,
-            chairman: chairman,
             critiqueRounds: enableCritique ? 1 : 0,
             rounds: UInt32(max(2, councilRounds)),
             maxResponseWords: UInt32(maxResponseWords)
@@ -716,15 +656,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                         council: council,
                         callback: self
                     )
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.isExecuting = false
                     }
                 } catch {
-                    DispatchQueue.main.async {
+                    let description = error.localizedDescription
+                    await MainActor.run {
                         self.isExecuting = false
-                        self.chairmanStatus = "error"
-                        self.chairmanError = error.localizedDescription
-                        self.buildStatusLog += "❌ Workflow Execution Error: \(error.localizedDescription)\n"
+                        self.executionError = description
+                        self.buildStatusLog += "❌ Workflow Execution Error: \(description)\n"
                     }
                 }
             }
@@ -738,14 +678,14 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                         council: council,
                         callback: self
                     )
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.isExecuting = false
                     }
                 } catch {
-                    DispatchQueue.main.async {
+                    let description = error.localizedDescription
+                    await MainActor.run {
                         self.isExecuting = false
-                        self.chairmanStatus = "error"
-                        self.chairmanError = error.localizedDescription
+                        self.executionError = description
                     }
                 }
             }

@@ -2,7 +2,7 @@
 
 Welcome to **Council of Experts**! 🏛️✨
 
-Instead of asking one model and hoping for the best, Council of Experts convenes a configurable panel of LLM experts, runs them in parallel, has them critique and revise each other's drafts, and then synthesizes their consensus through a Chairman model. Think fewer confident hallucinations, more peer review.
+Instead of asking one model and hoping for the best, Council of Experts convenes a configurable panel of LLM experts and runs them through a multi-round discussion: an opening statement in isolation, one or more reaction rounds where each expert reads the others' previous round and rebuts/agrees/refines, and a closing statement. Think fewer confident hallucinations, more peer review.
 
 It's a native macOS app (SwiftUI) backed by a Rust core, with support for Anthropic (Claude), Google Gemini, OpenAI-compatible models (ChatGPT, Grok, Ollama, LM Studio), and a Mock provider for sandboxed testing.
 
@@ -11,7 +11,7 @@ It's a native macOS app (SwiftUI) backed by a Rust core, with support for Anthro
 ## 🏛️ The Cast & Crew
 
 ### 1. Crates (Rust Core)
-*   [**`core`**](crates/core): The orchestration engine. Async provider clients, SSE token-streaming, the parallel drafting/critique/synthesis flow (`run_council_flow`), and a first-pass sandboxed agentic coding flow (`run_agent_coding_flow`) that applies file edits, runs a build command, and triggers critique-repair loops on failure.
+*   [**`core`**](crates/core): The orchestration engine. Async provider clients, SSE token-streaming, the multi-round panel discussion flow (`run_council_flow`), and a first-pass sandboxed agentic coding flow (`run_agent_coding_flow`) that applies file edits, runs a build command, and triggers critique-repair loops on failure.
 *   [**`ffi`**](crates/ffi): UniFFI bindings exposing the core's async streaming callbacks to Swift.
 
 ### 2. Platforms
@@ -21,7 +21,7 @@ It's a native macOS app (SwiftUI) backed by a Rust core, with support for Anthro
 
 ## 🎛️ Capabilities
 
-*   **Parallel drafting & critique**: Each expert drafts independently, then reviews and revises against the other panelists' drafts before the Chairman synthesizes a final answer.
+*   **Multi-round panel discussion**: Round 1 is an opening statement in isolation; the last round is a closing statement; anything in between is a reaction round where each expert reads the others' previous round and rebuts, agrees, or refines. 2–10 rounds, default 3.
 *   **Configurable council**: 1–8 experts, editable names, per-expert provider/model/base-URL, and custom system prompts — including LAN-hosted local models (e.g. `http://localhost:11434/v1` for Ollama/LM Studio).
 *   **Workspace context**: Select a local folder; indexed files can be attached to prompts.
 *   **Multimodal input**: Image attachments across Anthropic, Gemini, and OpenAI providers.

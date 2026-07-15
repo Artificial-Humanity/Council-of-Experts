@@ -179,11 +179,6 @@ struct ContentView: View {
                                 config: $viewModel.expertsConfig[idx]
                             )
                         }
-                        
-                        ExpertConfigSection(
-                            title: "Chairman (\(viewModel.chairmanConfig.name))",
-                            config: $viewModel.chairmanConfig
-                        )
                     }
                     
                     Spacer()
@@ -202,10 +197,11 @@ struct ContentView: View {
                                 .fontWeight(.medium)
                         }
                         
-                        if viewModel.chairmanStatus == "synthesis" {
-                            Text("Synthesizing drafts...")
+                        if let executionError = viewModel.executionError {
+                            Text(executionError)
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
                         }
                     }
                     .padding(.top, 10)
@@ -259,10 +255,10 @@ struct ContentView: View {
                             if viewModel.messages.isEmpty {
                                 VStack(spacing: 12) {
                                     Spacer()
-                                    Image(systemName: viewModel.isAgentCodingMode ? "terminal.fill" : "crown.fill")
+                                    Image(systemName: viewModel.isAgentCodingMode ? "terminal.fill" : "person.3.fill")
                                         .font(.system(size: 40))
                                         .foregroundColor(.purple.opacity(0.3))
-                                    Text(viewModel.isAgentCodingMode ? "State a software engineering goal. The council will patch files and test their compilation." : "Begin a consensus dialogue with Gaston and his panel experts.")
+                                    Text(viewModel.isAgentCodingMode ? "State a software engineering goal. The council will patch files and test their compilation." : "Begin a discussion with your panel of experts.")
                                         .font(.subheadline)
                                         .foregroundColor(.secondary)
                                         .multilineTextAlignment(.center)
@@ -276,12 +272,6 @@ struct ContentView: View {
                                         .id(msg.id)
                                 }
                             }
-                            
-                            // Live Streaming Synthesis Bubble
-                            if viewModel.isExecuting && viewModel.chairmanStatus == "synthesis" {
-                                StreamingSynthesisBubble(text: viewModel.chairmanText)
-                                    .id("streaming-synthesis")
-                            }
                         }
                         .padding()
                     }
@@ -290,11 +280,6 @@ struct ContentView: View {
                             withAnimation {
                                 proxy.scrollTo(last.id, anchor: .bottom)
                             }
-                        }
-                    }
-                    .onChange(of: viewModel.chairmanText) { _, _ in
-                        if viewModel.chairmanStatus == "synthesis" {
-                            proxy.scrollTo("streaming-synthesis", anchor: .bottom)
                         }
                     }
                 }
@@ -379,6 +364,7 @@ struct ContentView: View {
                                 .foregroundColor(.green)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(10)
+                                .textSelection(.enabled)
                         }
                         .background(Color.black)
                         .cornerRadius(8)
@@ -642,6 +628,7 @@ struct ExpertConfigSection: View {
                         Text(fetchError)
                             .font(.system(size: 9))
                             .foregroundColor(.red)
+                            .textSelection(.enabled)
                     }
                 }
                 
@@ -719,7 +706,8 @@ struct ChatBubble: View {
                     .cornerRadius(12)
                 }
                 .frame(maxWidth: 600, alignment: .trailing)
-            } else if msg.role == "expert-draft" || msg.role == "expert-critique" {
+            } else {
+                // "expert-draft" / "expert-critique", plus legacy "chairman"/"assistant" sessions
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Image(systemName: msg.role == "expert-critique" ? "arrow.triangle.2.circlepath" : "person.fill")
@@ -750,65 +738,7 @@ struct ChatBubble: View {
                 }
                 .frame(maxWidth: 700, alignment: .leading)
                 Spacer()
-            } else {
-                // "chairman" (and legacy "assistant" sessions)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "crown.fill")
-                            .foregroundColor(Color.amber)
-                            .font(.caption2)
-                        Text(msg.speakerName ?? "Gaston (Chairman)")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                    }
-                    Text(msg.content)
-                        .font(.system(.body, design: .serif))
-                        .lineSpacing(4)
-                        .padding(12)
-                        .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
-                        )
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: 700, alignment: .leading)
-                Spacer()
             }
-        }
-    }
-}
-
-struct StreamingSynthesisBubble: View {
-    let text: String
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.trailing, 4)
-                    Text("Gaston is synthesizing consensus...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .italic()
-                }
-                Text(text.isEmpty ? "Preparing final synthesis..." : text)
-                    .font(.system(.body, design: .serif))
-                    .lineSpacing(4)
-                    .padding(12)
-                    .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.purple.opacity(0.2), lineWidth: 1.5)
-                    )
-            }
-            .frame(maxWidth: 700, alignment: .leading)
-            Spacer()
         }
     }
 }
@@ -857,6 +787,7 @@ struct ExpertCardView: View {
                             Text("Draft Error: \(err)")
                                 .foregroundColor(.red)
                                 .font(.caption2)
+                                .textSelection(.enabled)
                         } else if state.response.isEmpty {
                             Text(state.status == "drafting" ? "Initiating draft stream..." : "Awaiting user query...")
                                 .foregroundColor(.secondary)
@@ -877,6 +808,7 @@ struct ExpertCardView: View {
                             Text("Round Error: \(err)")
                                 .foregroundColor(.red)
                                 .font(.caption2)
+                                .textSelection(.enabled)
                         } else if state.critiqueResponse.isEmpty {
                             Text(state.critiqueStatus == "drafting" ? "Streaming..." : "Awaiting opening statements...")
                                 .foregroundColor(.secondary)
@@ -985,6 +917,3 @@ struct StatusBadge: View {
     }
 }
 
-extension Color {
-    static let amber = Color(red: 1.0, green: 0.75, blue: 0.0)
-}

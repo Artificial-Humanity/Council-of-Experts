@@ -62,7 +62,6 @@ pub struct FfiCouncil {
     pub id: String,
     pub name: String,
     pub experts: Vec<FfiExpert>,
-    pub chairman: FfiExpert,
     pub critique_rounds: u32,
     pub rounds: u32,
     pub max_response_words: u32,
@@ -115,11 +114,6 @@ pub trait FfiCouncilCallback: Send + Sync {
     fn on_expert_critique_thinking_chunk(&self, expert_id: String, round_number: u32, chunk: String);
     fn on_expert_critique_completed(&self, expert_id: String, round_number: u32, is_final_round: bool, full_critique: String);
     fn on_expert_critique_error(&self, expert_id: String, round_number: u32, error: String);
-
-    fn on_chairman_started(&self);
-    fn on_chairman_chunk(&self, chunk: String);
-    fn on_chairman_completed(&self, full_response: String);
-    fn on_chairman_error(&self, error: String);
 }
 
 struct FfiCouncilCallbackProxy {
@@ -157,19 +151,6 @@ impl core::CouncilCallback for FfiCouncilCallbackProxy {
     }
     fn on_expert_critique_error(&self, expert_id: &str, round_number: u32, error: &str) {
         self.callback.on_expert_critique_error(expert_id.to_string(), round_number, error.to_string());
-    }
-
-    fn on_chairman_started(&self) {
-        self.callback.on_chairman_started();
-    }
-    fn on_chairman_chunk(&self, chunk: &str) {
-        self.callback.on_chairman_chunk(chunk.to_string());
-    }
-    fn on_chairman_completed(&self, full_response: &str) {
-        self.callback.on_chairman_completed(full_response.to_string());
-    }
-    fn on_chairman_error(&self, error: &str) {
-        self.callback.on_chairman_error(error.to_string());
     }
 }
 
@@ -230,7 +211,6 @@ fn map_council(c: FfiCouncil) -> core::Council {
         id: c.id,
         name: c.name,
         experts: c.experts.into_iter().map(map_expert).collect(),
-        chairman: map_expert(c.chairman),
         critique_rounds: c.critique_rounds,
         rounds: c.rounds,
         max_response_words: c.max_response_words,
@@ -338,11 +318,6 @@ pub trait FfiCodingCallback: Send + Sync {
     fn on_file_write(&self, path: String);
     fn on_build_started(&self, command: String);
     fn on_build_completed(&self, success: bool, output: String);
-
-    fn on_chairman_started(&self);
-    fn on_chairman_chunk(&self, chunk: String);
-    fn on_chairman_completed(&self, full_response: String);
-    fn on_chairman_error(&self, error: String);
 }
 
 pub struct FfiCodingCallbackProxy {
@@ -371,19 +346,6 @@ impl core::CodingCallback for FfiCodingCallbackProxy {
     }
     fn on_build_completed(&self, success: bool, output: &str) {
         self.callback.on_build_completed(success, output.to_string());
-    }
-
-    fn on_chairman_started(&self) {
-        self.callback.on_chairman_started();
-    }
-    fn on_chairman_chunk(&self, chunk: &str) {
-        self.callback.on_chairman_chunk(chunk.to_string());
-    }
-    fn on_chairman_completed(&self, full_response: &str) {
-        self.callback.on_chairman_completed(full_response.to_string());
-    }
-    fn on_chairman_error(&self, error: &str) {
-        self.callback.on_chairman_error(error.to_string());
     }
 }
 

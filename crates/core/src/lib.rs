@@ -84,7 +84,6 @@ pub struct Council {
     pub id: String,
     pub name: String,
     pub experts: Vec<Expert>,
-    pub chairman: Expert,
     // Gates the build-failure repair loop in run_agent_coding_flow. Unrelated to `rounds` below.
     pub critique_rounds: u32,
     // Total discussion rounds for run_council_flow: round 1 is the opening statement (isolated),
@@ -114,11 +113,6 @@ pub trait CouncilCallback: Send + Sync {
     fn on_expert_critique_thinking_chunk(&self, expert_id: &str, round_number: u32, chunk: &str);
     fn on_expert_critique_completed(&self, expert_id: &str, round_number: u32, is_final_round: bool, full_critique: &str);
     fn on_expert_critique_error(&self, expert_id: &str, round_number: u32, error: &str);
-
-    fn on_chairman_started(&self);
-    fn on_chairman_chunk(&self, chunk: &str);
-    fn on_chairman_completed(&self, full_response: &str);
-    fn on_chairman_error(&self, error: &str);
 }
 
 #[async_trait::async_trait]
@@ -144,15 +138,14 @@ fn role_to_string(role: &Role) -> String {
 }
 
 // ── OpenAI Compatible Client ──
+#[derive(Default)]
 pub struct OpenAiCompatibleClient {
     pub client: reqwest::Client,
 }
 
 impl OpenAiCompatibleClient {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
+        Self::default()
     }
 }
 
@@ -214,10 +207,12 @@ impl LlmProvider for OpenAiCompatibleClient {
             "content": user_content
         }));
 
+        // Temperature is intentionally omitted: several reasoning-tier models (gpt-5,
+        // gpt-5-mini, gpt-5-nano) reject any non-default value with a 400, and this app
+        // never exposed temperature as a user-configurable setting anyway.
         let body = serde_json::json!({
             "model": expert.config.model_name,
             "messages": messages,
-            "temperature": expert.config.temperature.unwrap_or(0.7),
             "stream": false
         });
 
@@ -308,10 +303,10 @@ impl LlmProvider for OpenAiCompatibleClient {
             "content": user_content
         }));
 
+        // Temperature is intentionally omitted (see the comment in `generate` above).
         let body = serde_json::json!({
             "model": expert.config.model_name,
             "messages": messages,
-            "temperature": expert.config.temperature.unwrap_or(0.7),
             "stream": true
         });
 
@@ -368,15 +363,14 @@ impl LlmProvider for OpenAiCompatibleClient {
 }
 
 // ── Anthropic Client ──
+#[derive(Default)]
 pub struct AnthropicClient {
     pub client: reqwest::Client,
 }
 
 impl AnthropicClient {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
+        Self::default()
     }
 }
 
@@ -574,8 +568,7 @@ impl LlmProvider for AnthropicClient {
                     continue;
                 }
 
-                if trimmed.starts_with("data: ") {
-                    let data_str = &trimmed[6..];
+                if let Some(data_str) = trimmed.strip_prefix("data: ") {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str) {
                         if let Some(event_type) = val["type"].as_str() {
                             if event_type == "content_block_delta" {
@@ -598,15 +591,14 @@ impl LlmProvider for AnthropicClient {
 }
 
 // ── Google Gemini Client ──
+#[derive(Default)]
 pub struct GeminiClient {
     pub client: reqwest::Client,
 }
 
 impl GeminiClient {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
+        Self::default()
     }
 }
 
@@ -693,8 +685,11 @@ impl LlmProvider for GeminiClient {
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
         let api_key = expert.config.api_key.clone().unwrap_or_default();
+        // `alt=sse` switches this endpoint from a single slowly-growing JSON array (which
+        // can only be parsed once the entire response has arrived) to one complete JSON
+        // object per "data:" line, streamed incrementally like the other providers.
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}",
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
             expert.config.model_name, api_key
         );
 
@@ -783,29 +778,17 @@ impl LlmProvider for GeminiClient {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
 
-            let trimmed = buffer.trim();
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(arr) = val.as_array() {
-                        for item in arr {
-                            dispatch_gemini_parts(item, callback);
-                        }
-                        buffer.clear();
-                    }
+            while let Some(line_end) = buffer.find('\n') {
+                let line = buffer.drain(..=line_end).collect::<String>();
+                let trimmed = line.trim();
+
+                if trimmed.is_empty() {
+                    continue;
                 }
-            } else if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    dispatch_gemini_parts(&val, callback);
-                    buffer.clear();
-                }
-            } else {
-                while let Some(delimiter_idx) = buffer.find("\n") {
-                    let line = buffer.drain(..=delimiter_idx).collect::<String>();
-                    let line_trimmed = line.trim().trim_matches(',');
-                    if line_trimmed.starts_with('{') && line_trimmed.ends_with('}') {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line_trimmed) {
-                            dispatch_gemini_parts(&val, callback);
-                        }
+
+                if let Some(data_str) = trimmed.strip_prefix("data: ") {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str) {
+                        dispatch_gemini_parts(&val, callback);
                     }
                 }
             }
@@ -816,6 +799,7 @@ impl LlmProvider for GeminiClient {
 }
 
 // ── Mock Provider ──
+#[derive(Default)]
 pub struct MockProvider;
 
 impl MockProvider {
@@ -969,23 +953,28 @@ pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelEr
 
 // ── Council Flow Orchestration ──
 
+// Which round is running and how it should report through CouncilCallback: round 1 (opening
+// statements, generated in isolation) reports through on_expert_*, every later round reports
+// through on_expert_critique_* with the round number and whether it's the closing round.
+struct RoundMeta {
+    round_number: u32,
+    is_final: bool,
+    is_opening: bool,
+}
+
 // Runs one discussion round for every expert in parallel and waits for all of them to finish.
-// `is_opening` selects which pair of callback methods gets used: round 1 (opening statements,
-// generated in isolation) reports through on_expert_*, every later round reports through
-// on_expert_critique_* with the round number and whether it's the closing round.
 async fn run_expert_round<F>(
     council: &Council,
     attachments: &[Attachment],
     history: &[Message],
     callback: &Arc<dyn CouncilCallback + 'static>,
-    round_number: u32,
-    is_final: bool,
-    is_opening: bool,
+    meta: RoundMeta,
     prompt_for_expert: F,
 ) -> Vec<(String, String)>
 where
     F: Fn(&Expert) -> String,
 {
+    let RoundMeta { round_number, is_final, is_opening } = meta;
     let mut handles = Vec::new();
 
     for expert in &council.experts {
@@ -1109,7 +1098,7 @@ pub async fn run_council_flow(
 
     let mut previous_round = run_expert_round(
         council, attachments, history, &callback,
-        1, total_rounds == 1, true,
+        RoundMeta { round_number: 1, is_final: total_rounds == 1, is_opening: true },
         opening_prompt_for,
     ).await;
 
@@ -1141,7 +1130,7 @@ pub async fn run_council_flow(
 
         let round_results = run_expert_round(
             council, attachments, history, &callback,
-            round_number, is_final, false,
+            RoundMeta { round_number, is_final, is_opening: false },
             prompt_for,
         ).await;
 
@@ -1150,63 +1139,8 @@ pub async fn run_council_flow(
         }
     }
 
-    // Chairman Synthesis Phase — synthesizes from the closing round's statements.
-    callback.on_chairman_started();
-
-    let mut compiled_history = history.to_vec();
-    for (expert_id, text) in &previous_round {
-        compiled_history.push(Message {
-            id: format!("msg_closing_{}", expert_id),
-            role: Role::ExpertDraft { expert_id: expert_id.clone() },
-            content: text.clone(),
-            timestamp: 0,
-        });
-    }
-
-    let synthesis_prompt = format!(
-        "The original user query is: \"{}\"\n\nHere are the closing statements from the {}-round expert panel discussion:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
-        prompt,
-        total_rounds,
-        previous_round.iter().map(|(id, text)| format!("- Expert [{}]:\n{}", id, text)).collect::<Vec<_>>().join("\n\n")
-    );
-
-    struct ChairmanStreamProxy {
-        cb: Arc<dyn CouncilCallback + 'static>,
-        full_text: Mutex<String>,
-    }
-
-    impl StreamCallback for ChairmanStreamProxy {
-        fn on_chunk(&self, chunk: &str) {
-            self.cb.on_chairman_chunk(chunk);
-            if let Ok(mut text) = self.full_text.lock() {
-                text.push_str(chunk);
-            }
-        }
-        fn on_error(&self, error: &str) {
-            self.cb.on_chairman_error(error);
-        }
-    }
-
-    let proxy = ChairmanStreamProxy {
-        cb: callback.clone(),
-        full_text: Mutex::new(String::new()),
-    };
-
-    let chairman_provider = get_provider(&council.chairman.config.provider_type);
-    match chairman_provider.generate_stream(&synthesis_prompt, &[], &compiled_history, &council.chairman, &proxy).await {
-        Ok(_) => {
-            let final_response = {
-                let text_lock = proxy.full_text.lock().unwrap();
-                text_lock.clone()
-            };
-            callback.on_chairman_completed(&final_response);
-            Ok(final_response)
-        }
-        Err(e) => {
-            callback.on_chairman_error(&e.to_string());
-            Err(e)
-        }
-    }
+    // No synthesis step: the panel's closing statements are the end of the discussion.
+    Ok(previous_round.iter().map(|(id, text)| format!("- Expert [{}]:\n{}", id, text)).collect::<Vec<_>>().join("\n\n"))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1278,11 +1212,6 @@ pub trait CodingCallback: Send + Sync {
     fn on_file_write(&self, path: &str);
     fn on_build_started(&self, command: &str);
     fn on_build_completed(&self, success: bool, output: &str);
-
-    fn on_chairman_started(&self);
-    fn on_chairman_chunk(&self, chunk: &str);
-    fn on_chairman_completed(&self, full_response: &str);
-    fn on_chairman_error(&self, error: &str);
 }
 
 pub async fn run_agent_coding_flow(
@@ -1510,63 +1439,13 @@ pub async fn run_agent_coding_flow(
         }
     }
     
-    callback.on_chairman_started();
-    
-    let mut compiled_history = history.to_vec();
-    for (expert_id, draft) in &final_expert_drafts {
-        compiled_history.push(Message {
-            id: format!("msg_coding_draft_{}", expert_id),
-            role: Role::ExpertDraft { expert_id: expert_id.clone() },
-            content: draft.clone(),
-            timestamp: 0,
-        });
-    }
-    
-    let synthesis_prompt = format!(
-        "The original user query is: \"{}\"\n\nHere are the final code draft proposals generated by the active expert council:\n\n{}\n\nWorkspace build outcome (Success: {}):\n{}\n\nPlease synthesize a final, cohesive, and comprehensive report explaining the changes made, the build test results, and any recommendations.",
-        prompt,
-        final_expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n"),
+    // No synthesis step: file edits and the build outcome (already reported via
+    // on_file_write/on_build_completed) are the end of this workflow.
+    Ok(format!(
+        "Build success: {}\n\n{}",
         build_success,
-        build_log
-    );
-    
-    struct ChairmanStreamProxy {
-        cb: Arc<dyn CodingCallback + 'static>,
-        full_text: Mutex<String>,
-    }
-    
-    impl StreamCallback for ChairmanStreamProxy {
-        fn on_chunk(&self, chunk: &str) {
-            self.cb.on_chairman_chunk(chunk);
-            if let Ok(mut text) = self.full_text.lock() {
-                text.push_str(chunk);
-            }
-        }
-        fn on_error(&self, error: &str) {
-            self.cb.on_chairman_error(error);
-        }
-    }
-    
-    let proxy = ChairmanStreamProxy {
-        cb: callback.clone(),
-        full_text: Mutex::new(String::new()),
-    };
-    
-    let chairman_provider = get_provider(&council.chairman.config.provider_type);
-    match chairman_provider.generate_stream(&synthesis_prompt, &[], &compiled_history, &council.chairman, &proxy).await {
-        Ok(_) => {
-            let final_response = {
-                let text_lock = proxy.full_text.lock().unwrap();
-                text_lock.clone()
-            };
-            callback.on_chairman_completed(&final_response);
-            Ok(final_response)
-        }
-        Err(e) => {
-            callback.on_chairman_error(&e.to_string());
-            Err(e)
-        }
-    }
+        final_expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n")
+    ))
 }
 
 #[cfg(test)]
@@ -1605,13 +1484,6 @@ mod tests {
             self.completed_critiques.lock().unwrap().push(expert_id.to_string());
         }
         fn on_expert_critique_error(&self, _expert_id: &str, _round_number: u32, _error: &str) {}
-
-        fn on_chairman_started(&self) {}
-        fn on_chairman_chunk(&self, chunk: &str) {
-            self.chunks.lock().unwrap().push(chunk.to_string());
-        }
-        fn on_chairman_completed(&self, _full_response: &str) {}
-        fn on_chairman_error(&self, _error: &str) {}
     }
 
     #[test]
@@ -1657,12 +1529,6 @@ mod tests {
                     system_prompt: "you are expert 2".to_string(),
                 },
             ],
-            chairman: Expert {
-                id: "chairman".to_string(),
-                name: "Chairman".to_string(),
-                config: mock_config.clone(),
-                system_prompt: "you are the chairman".to_string(),
-            },
             critique_rounds: 1,
             rounds: 2,
             max_response_words: 300,
@@ -1688,8 +1554,8 @@ mod tests {
         assert_eq!(completed.len(), 2);
         assert_eq!(started_crit.len(), 2);
         assert_eq!(completed_crit.len(), 2);
-        assert_eq!(started.contains(&"expert-1".to_string()), true);
-        assert_eq!(started_crit.contains(&"expert-2".to_string()), true);
+        assert!(started.contains(&"expert-1".to_string()));
+        assert!(started_crit.contains(&"expert-2".to_string()));
     }
 
     #[test]
