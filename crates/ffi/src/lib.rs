@@ -63,6 +63,8 @@ pub struct FfiCouncil {
     pub experts: Vec<FfiExpert>,
     pub chairman: FfiExpert,
     pub critique_rounds: u32,
+    pub rounds: u32,
+    pub max_response_words: u32,
 }
 
 #[derive(Debug, Error, uniffi::Error)]
@@ -106,10 +108,10 @@ pub trait FfiCouncilCallback: Send + Sync {
     fn on_expert_completed(&self, expert_id: String, full_response: String);
     fn on_expert_error(&self, expert_id: String, error: String);
     
-    fn on_expert_critique_started(&self, expert_id: String);
-    fn on_expert_critique_chunk(&self, expert_id: String, chunk: String);
-    fn on_expert_critique_completed(&self, expert_id: String, full_critique: String);
-    fn on_expert_critique_error(&self, expert_id: String, error: String);
+    fn on_expert_critique_started(&self, expert_id: String, round_number: u32, is_final_round: bool);
+    fn on_expert_critique_chunk(&self, expert_id: String, round_number: u32, chunk: String);
+    fn on_expert_critique_completed(&self, expert_id: String, round_number: u32, is_final_round: bool, full_critique: String);
+    fn on_expert_critique_error(&self, expert_id: String, round_number: u32, error: String);
 
     fn on_chairman_started(&self);
     fn on_chairman_chunk(&self, chunk: String);
@@ -134,18 +136,18 @@ impl core::CouncilCallback for FfiCouncilCallbackProxy {
     fn on_expert_error(&self, expert_id: &str, error: &str) {
         self.callback.on_expert_error(expert_id.to_string(), error.to_string());
     }
-    
-    fn on_expert_critique_started(&self, expert_id: &str) {
-        self.callback.on_expert_critique_started(expert_id.to_string());
+
+    fn on_expert_critique_started(&self, expert_id: &str, round_number: u32, is_final_round: bool) {
+        self.callback.on_expert_critique_started(expert_id.to_string(), round_number, is_final_round);
     }
-    fn on_expert_critique_chunk(&self, expert_id: &str, chunk: &str) {
-        self.callback.on_expert_critique_chunk(expert_id.to_string(), chunk.to_string());
+    fn on_expert_critique_chunk(&self, expert_id: &str, round_number: u32, chunk: &str) {
+        self.callback.on_expert_critique_chunk(expert_id.to_string(), round_number, chunk.to_string());
     }
-    fn on_expert_critique_completed(&self, expert_id: &str, full_critique: &str) {
-        self.callback.on_expert_critique_completed(expert_id.to_string(), full_critique.to_string());
+    fn on_expert_critique_completed(&self, expert_id: &str, round_number: u32, is_final_round: bool, full_critique: &str) {
+        self.callback.on_expert_critique_completed(expert_id.to_string(), round_number, is_final_round, full_critique.to_string());
     }
-    fn on_expert_critique_error(&self, expert_id: &str, error: &str) {
-        self.callback.on_expert_critique_error(expert_id.to_string(), error.to_string());
+    fn on_expert_critique_error(&self, expert_id: &str, round_number: u32, error: &str) {
+        self.callback.on_expert_critique_error(expert_id.to_string(), round_number, error.to_string());
     }
 
     fn on_chairman_started(&self) {
@@ -220,6 +222,8 @@ fn map_council(c: FfiCouncil) -> core::Council {
         experts: c.experts.into_iter().map(map_expert).collect(),
         chairman: map_expert(c.chairman),
         critique_rounds: c.critique_rounds,
+        rounds: c.rounds,
+        max_response_words: c.max_response_words,
     }
 }
 

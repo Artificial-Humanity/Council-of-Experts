@@ -551,15 +551,19 @@ public struct FfiCouncil {
     public var experts: [FfiExpert]
     public var chairman: FfiExpert
     public var critiqueRounds: UInt32
+    public var rounds: UInt32
+    public var maxResponseWords: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, experts: [FfiExpert], chairman: FfiExpert, critiqueRounds: UInt32) {
+    public init(id: String, name: String, experts: [FfiExpert], chairman: FfiExpert, critiqueRounds: UInt32, rounds: UInt32, maxResponseWords: UInt32) {
         self.id = id
         self.name = name
         self.experts = experts
         self.chairman = chairman
         self.critiqueRounds = critiqueRounds
+        self.rounds = rounds
+        self.maxResponseWords = maxResponseWords
     }
 }
 
@@ -582,6 +586,12 @@ extension FfiCouncil: Equatable, Hashable {
         if lhs.critiqueRounds != rhs.critiqueRounds {
             return false
         }
+        if lhs.rounds != rhs.rounds {
+            return false
+        }
+        if lhs.maxResponseWords != rhs.maxResponseWords {
+            return false
+        }
         return true
     }
 
@@ -591,6 +601,8 @@ extension FfiCouncil: Equatable, Hashable {
         hasher.combine(experts)
         hasher.combine(chairman)
         hasher.combine(critiqueRounds)
+        hasher.combine(rounds)
+        hasher.combine(maxResponseWords)
     }
 }
 
@@ -603,7 +615,9 @@ public struct FfiConverterTypeFfiCouncil: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 experts: FfiConverterSequenceTypeFfiExpert.read(from: &buf), 
                 chairman: FfiConverterTypeFfiExpert.read(from: &buf), 
-                critiqueRounds: FfiConverterUInt32.read(from: &buf)
+                critiqueRounds: FfiConverterUInt32.read(from: &buf), 
+                rounds: FfiConverterUInt32.read(from: &buf), 
+                maxResponseWords: FfiConverterUInt32.read(from: &buf)
         )
     }
 
@@ -613,6 +627,8 @@ public struct FfiConverterTypeFfiCouncil: FfiConverterRustBuffer {
         FfiConverterSequenceTypeFfiExpert.write(value.experts, into: &buf)
         FfiConverterTypeFfiExpert.write(value.chairman, into: &buf)
         FfiConverterUInt32.write(value.critiqueRounds, into: &buf)
+        FfiConverterUInt32.write(value.rounds, into: &buf)
+        FfiConverterUInt32.write(value.maxResponseWords, into: &buf)
     }
 }
 
@@ -1469,13 +1485,13 @@ public protocol FfiCouncilCallback : AnyObject {
     
     func onExpertError(expertId: String, error: String) 
     
-    func onExpertCritiqueStarted(expertId: String) 
+    func onExpertCritiqueStarted(expertId: String, roundNumber: UInt32, isFinalRound: Bool) 
     
-    func onExpertCritiqueChunk(expertId: String, chunk: String) 
+    func onExpertCritiqueChunk(expertId: String, roundNumber: UInt32, chunk: String) 
     
-    func onExpertCritiqueCompleted(expertId: String, fullCritique: String) 
+    func onExpertCritiqueCompleted(expertId: String, roundNumber: UInt32, isFinalRound: Bool, fullCritique: String) 
     
-    func onExpertCritiqueError(expertId: String, error: String) 
+    func onExpertCritiqueError(expertId: String, roundNumber: UInt32, error: String) 
     
     func onChairmanStarted() 
     
@@ -1600,6 +1616,8 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
         onExpertCritiqueStarted: { (
             uniffiHandle: UInt64,
             expertId: RustBuffer,
+            roundNumber: UInt32,
+            isFinalRound: Int8,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1609,7 +1627,9 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onExpertCritiqueStarted(
-                     expertId: try FfiConverterString.lift(expertId)
+                     expertId: try FfiConverterString.lift(expertId),
+                     roundNumber: try FfiConverterUInt32.lift(roundNumber),
+                     isFinalRound: try FfiConverterBool.lift(isFinalRound)
                 )
             }
 
@@ -1624,6 +1644,7 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
         onExpertCritiqueChunk: { (
             uniffiHandle: UInt64,
             expertId: RustBuffer,
+            roundNumber: UInt32,
             chunk: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
@@ -1635,6 +1656,7 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                 }
                 return uniffiObj.onExpertCritiqueChunk(
                      expertId: try FfiConverterString.lift(expertId),
+                     roundNumber: try FfiConverterUInt32.lift(roundNumber),
                      chunk: try FfiConverterString.lift(chunk)
                 )
             }
@@ -1650,6 +1672,8 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
         onExpertCritiqueCompleted: { (
             uniffiHandle: UInt64,
             expertId: RustBuffer,
+            roundNumber: UInt32,
+            isFinalRound: Int8,
             fullCritique: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
@@ -1661,6 +1685,8 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                 }
                 return uniffiObj.onExpertCritiqueCompleted(
                      expertId: try FfiConverterString.lift(expertId),
+                     roundNumber: try FfiConverterUInt32.lift(roundNumber),
+                     isFinalRound: try FfiConverterBool.lift(isFinalRound),
                      fullCritique: try FfiConverterString.lift(fullCritique)
                 )
             }
@@ -1676,6 +1702,7 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
         onExpertCritiqueError: { (
             uniffiHandle: UInt64,
             expertId: RustBuffer,
+            roundNumber: UInt32,
             error: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
@@ -1687,6 +1714,7 @@ fileprivate struct UniffiCallbackInterfaceFfiCouncilCallback {
                 }
                 return uniffiObj.onExpertCritiqueError(
                      expertId: try FfiConverterString.lift(expertId),
+                     roundNumber: try FfiConverterUInt32.lift(roundNumber),
                      error: try FfiConverterString.lift(error)
                 )
             }
@@ -2294,16 +2322,16 @@ private var initializationResult: InitializationResult {
     if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_error() != 48180) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_started() != 30849) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_started() != 55042) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_chunk() != 14532) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_chunk() != 4548) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_completed() != 37750) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_completed() != 62672) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_error() != 57994) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_critique_error() != 14886) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_chairman_started() != 13278) {

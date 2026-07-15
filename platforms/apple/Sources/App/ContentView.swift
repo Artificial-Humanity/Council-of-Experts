@@ -26,16 +26,27 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Stepper("Active Experts: \(viewModel.activeExpertCount)", value: $viewModel.activeExpertCount, in: 1...8)
                             .font(.subheadline)
-                        
+
                         Text("Limit: 1 - 8 panel members")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Enable Critique Loop", isOn: $viewModel.enableCritique)
+
+                    // Stepper for panel discussion rounds (opening statement ... closing statement)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Stepper("Discussion Rounds: \(viewModel.councilRounds)", value: $viewModel.councilRounds, in: 2...10)
                             .font(.subheadline)
-                        
+
+                        Text("Round 1 is opening statements, the last round is closing statements.")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Retry Once on Build Failure", isOn: $viewModel.enableCritique)
+                            .font(.subheadline)
+                            .help("When Agent Coding Mode's build fails, let the panel critique and retry once")
+
                         Toggle("Agent Coding Mode", isOn: $viewModel.isAgentCodingMode)
                             .font(.subheadline)
                             .foregroundColor(.purple)
@@ -317,7 +328,7 @@ struct ContentView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 8)
                     }
-                    .frame(maxHeight: viewModel.activeExpertCount > 2 ? 180 : 110)
+                    .frame(maxHeight: viewModel.activeExpertCount > 2 ? 130 : 84)
                 }
                 .background(.thinMaterial)
                 
@@ -666,7 +677,7 @@ struct ChatBubble: View {
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
-                        Text(msg.role == "expert-critique" ? "Critique & Revision" : "Draft")
+                        Text(msg.stageLabel ?? (msg.role == "expert-critique" ? "Critique & Revision" : "Draft"))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.secondary)
                             .padding(.horizontal, 5)
@@ -769,9 +780,9 @@ struct ExpertCardView: View {
             
             // Tab Selector
             Picker("", selection: $selectedTab) {
-                Text("Draft 1").tag(0)
+                Text("Opening").tag(0)
                 HStack(spacing: 4) {
-                    Text("Critique")
+                    Text("Latest")
                     if state.critiqueStatus == "drafting" {
                         Circle()
                             .fill(Color.blue)
@@ -780,47 +791,47 @@ struct ExpertCardView: View {
                 }.tag(1)
             }
             .segment(selectedTab: $selectedTab, state: state)
-            
+
             Divider()
-            
+
             ScrollView {
                 if selectedTab == 0 {
                     // Display Initial Draft
                     if let err = state.error, state.status == "error" {
                         Text("Draft Error: \(err)")
                             .foregroundColor(.red)
-                            .font(.caption)
+                            .font(.caption2)
                     } else if state.response.isEmpty {
                         Text(state.status == "drafting" ? "Initiating draft stream..." : "Awaiting user query...")
                             .foregroundColor(.secondary)
-                            .font(.system(size: 10))
+                            .font(.system(size: 9))
                             .italic()
                     } else {
                         Text(state.response)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 9, design: .monospaced))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
                 } else {
-                    // Display Critique & Revision
+                    // Display the most recent round's output
                     if let err = state.error, state.critiqueStatus == "error" {
-                        Text("Critique Error: \(err)")
+                        Text("Round Error: \(err)")
                             .foregroundColor(.red)
-                            .font(.caption)
+                            .font(.caption2)
                     } else if state.critiqueResponse.isEmpty {
-                        Text(state.critiqueStatus == "drafting" ? "Streaming critiques..." : "Awaiting initial drafts...")
+                        Text(state.critiqueStatus == "drafting" ? "Streaming..." : "Awaiting opening statements...")
                             .foregroundColor(.secondary)
-                            .font(.system(size: 10))
+                            .font(.system(size: 9))
                             .italic()
                     } else {
                         Text(state.critiqueResponse)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 9, design: .monospaced))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
                 }
             }
-            .frame(height: 80)
+            .frame(height: 44)
         }
         .padding(8)
         .background(Color(NSColor.controlBackgroundColor).opacity(0.6))

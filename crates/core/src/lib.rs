@@ -82,7 +82,13 @@ pub struct Council {
     pub name: String,
     pub experts: Vec<Expert>,
     pub chairman: Expert,
+    // Gates the build-failure repair loop in run_agent_coding_flow. Unrelated to `rounds` below.
     pub critique_rounds: u32,
+    // Total discussion rounds for run_council_flow: round 1 is the opening statement (isolated),
+    // the last round is the closing statement, anything in between is a reaction round. Minimum 2.
+    pub rounds: u32,
+    // Soft word-count ceiling communicated to each model via an added prompt instruction.
+    pub max_response_words: u32,
 }
 
 pub trait StreamCallback: Send + Sync {
@@ -95,11 +101,11 @@ pub trait CouncilCallback: Send + Sync {
     fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
     fn on_expert_completed(&self, expert_id: &str, full_response: &str);
     fn on_expert_error(&self, expert_id: &str, error: &str);
-    
-    fn on_expert_critique_started(&self, expert_id: &str);
-    fn on_expert_critique_chunk(&self, expert_id: &str, chunk: &str);
-    fn on_expert_critique_completed(&self, expert_id: &str, full_critique: &str);
-    fn on_expert_critique_error(&self, expert_id: &str, error: &str);
+
+    fn on_expert_critique_started(&self, expert_id: &str, round_number: u32, is_final_round: bool);
+    fn on_expert_critique_chunk(&self, expert_id: &str, round_number: u32, chunk: &str);
+    fn on_expert_critique_completed(&self, expert_id: &str, round_number: u32, is_final_round: bool, full_critique: &str);
+    fn on_expert_critique_error(&self, expert_id: &str, round_number: u32, error: &str);
 
     fn on_chairman_started(&self);
     fn on_chairman_chunk(&self, chunk: &str);
@@ -915,6 +921,115 @@ pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelEr
 }
 
 // ── Council Flow Orchestration ──
+
+// Runs one discussion round for every expert in parallel and waits for all of them to finish.
+// `is_opening` selects which pair of callback methods gets used: round 1 (opening statements,
+// generated in isolation) reports through on_expert_*, every later round reports through
+// on_expert_critique_* with the round number and whether it's the closing round.
+async fn run_expert_round<F>(
+    council: &Council,
+    attachments: &[Attachment],
+    history: &[Message],
+    callback: &Arc<dyn CouncilCallback + 'static>,
+    round_number: u32,
+    is_final: bool,
+    is_opening: bool,
+    prompt_for_expert: F,
+) -> Vec<(String, String)>
+where
+    F: Fn(&Expert) -> String,
+{
+    let mut handles = Vec::new();
+
+    for expert in &council.experts {
+        let expert = expert.clone();
+        let round_prompt = prompt_for_expert(&expert);
+        let attachments = attachments.to_vec();
+        let history = history.to_vec();
+        let cb = callback.clone();
+
+        let handle = RUNTIME.spawn(async move {
+            if is_opening {
+                cb.on_expert_started(&expert.id);
+            } else {
+                cb.on_expert_critique_started(&expert.id, round_number, is_final);
+            }
+
+            struct RoundStreamProxy {
+                expert_id: String,
+                cb: Arc<dyn CouncilCallback + 'static>,
+                full_text: Mutex<String>,
+                is_opening: bool,
+                round_number: u32,
+            }
+
+            impl StreamCallback for RoundStreamProxy {
+                fn on_chunk(&self, chunk: &str) {
+                    if self.is_opening {
+                        self.cb.on_expert_chunk(&self.expert_id, chunk);
+                    } else {
+                        self.cb.on_expert_critique_chunk(&self.expert_id, self.round_number, chunk);
+                    }
+                    if let Ok(mut text) = self.full_text.lock() {
+                        text.push_str(chunk);
+                    }
+                }
+                fn on_error(&self, error: &str) {
+                    if self.is_opening {
+                        self.cb.on_expert_error(&self.expert_id, error);
+                    } else {
+                        self.cb.on_expert_critique_error(&self.expert_id, self.round_number, error);
+                    }
+                }
+            }
+
+            let proxy = RoundStreamProxy {
+                expert_id: expert.id.clone(),
+                cb: cb.clone(),
+                full_text: Mutex::new(String::new()),
+                is_opening,
+                round_number,
+            };
+
+            let provider = get_provider(&expert.config.provider_type);
+            match provider.generate_stream(&round_prompt, &attachments, &history, &expert, &proxy).await {
+                Ok(_) => {
+                    let full_response = {
+                        let text_lock = proxy.full_text.lock().unwrap();
+                        text_lock.clone()
+                    };
+                    if is_opening {
+                        cb.on_expert_completed(&expert.id, &full_response);
+                    } else {
+                        cb.on_expert_critique_completed(&expert.id, round_number, is_final, &full_response);
+                    }
+                    Ok((expert.id.clone(), full_response))
+                }
+                Err(e) => {
+                    if is_opening {
+                        cb.on_expert_error(&expert.id, &e.to_string());
+                    } else {
+                        cb.on_expert_critique_error(&expert.id, round_number, &e.to_string());
+                    }
+                    Err(e)
+                }
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    let mut results = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(pair)) => results.push(pair),
+            Ok(Err(e)) => eprintln!("Expert round error: {:?}", e),
+            Err(e) => eprintln!("Tokio task join error: {:?}", e),
+        }
+    }
+    results
+}
+
 pub async fn run_council_flow(
     prompt: &str,
     attachments: &[Attachment],
@@ -922,203 +1037,90 @@ pub async fn run_council_flow(
     council: &Council,
     callback: Arc<dyn CouncilCallback + 'static>,
 ) -> Result<String, PanelError> {
-    // 1. Initial Drafting Phase
-    let mut draft_handles = Vec::new();
-    
-    for expert in &council.experts {
-        let expert = expert.clone();
-        let prompt = prompt.to_string();
-        let attachments = attachments.to_vec();
-        let history = history.to_vec();
-        let cb = callback.clone();
-        
-        let handle = RUNTIME.spawn(async move {
-            cb.on_expert_started(&expert.id);
-            
-            struct ExpertStreamProxy {
-                expert_id: String,
-                cb: Arc<dyn CouncilCallback + 'static>,
-                full_text: Mutex<String>,
-            }
-            
-            impl StreamCallback for ExpertStreamProxy {
-                fn on_chunk(&self, chunk: &str) {
-                    self.cb.on_expert_chunk(&self.expert_id, chunk);
-                    if let Ok(mut text) = self.full_text.lock() {
-                        text.push_str(chunk);
-                    }
-                }
-                fn on_error(&self, error: &str) {
-                    self.cb.on_expert_error(&self.expert_id, error);
-                }
-            }
-            
-            let proxy = ExpertStreamProxy {
-                expert_id: expert.id.clone(),
-                cb: cb.clone(),
-                full_text: Mutex::new(String::new()),
-            };
-            
-            let provider = get_provider(&expert.config.provider_type);
-            match provider.generate_stream(&prompt, &attachments, &history, &expert, &proxy).await {
-                Ok(_) => {
-                    let full_response = {
-                        let text_lock = proxy.full_text.lock().unwrap();
-                        text_lock.clone()
-                    };
-                    cb.on_expert_completed(&expert.id, &full_response);
-                    Ok((expert.id.clone(), full_response))
-                }
-                Err(e) => {
-                    cb.on_expert_error(&expert.id, &e.to_string());
-                    Err(e)
-                }
-            }
-        });
-        
-        draft_handles.push(handle);
-    }
-    
-    let mut expert_drafts = Vec::new();
-    for handle in draft_handles {
-        match handle.await {
-            Ok(Ok((expert_id, response))) => {
-                expert_drafts.push((expert_id, response));
-            }
-            Ok(Err(e)) => {
-                eprintln!("Expert draft error: {:?}", e);
-            }
-            Err(e) => {
-                eprintln!("Tokio task join error: {:?}", e);
-            }
-        }
-    }
+    let total_rounds = council.rounds.max(2);
+    let max_words = if council.max_response_words == 0 { 300 } else { council.max_response_words };
 
-    // 2. Parallel Critique Phase
-    let mut final_expert_drafts = expert_drafts.clone();
-    let mut expert_critiques = Vec::new();
+    let style_instruction = format!(
+        "Keep your response succinct and focused — no more than approximately {} words. Do not end your response with a question unless a clarifying question is truly necessary to proceed.",
+        max_words
+    );
 
-    if council.critique_rounds > 0 {
-        let mut critique_handles = Vec::new();
-        
-        for expert in &council.experts {
-            let expert = expert.clone();
-            let prompt = prompt.to_string();
-            let attachments = attachments.to_vec();
-            let history = history.to_vec();
-            let cb = callback.clone();
-            
-            let other_drafts_str = expert_drafts.iter()
+    // Round 1: opening statements, each expert answering in isolation.
+    let opening_prompt_for = |_expert: &Expert| -> String {
+        format!(
+            "{}\n\nThis is a {}-round panel discussion. Give your OPENING STATEMENT (round 1 of {}) responding to the user's query below. You have not seen any other panelist's answer yet — answer based on your own reasoning alone.\n\nUser query: \"{}\"",
+            style_instruction, total_rounds, total_rounds, prompt
+        )
+    };
+
+    let mut previous_round = run_expert_round(
+        council, attachments, history, &callback,
+        1, total_rounds == 1, true,
+        opening_prompt_for,
+    ).await;
+
+    // Rounds 2..total_rounds: each expert reads the immediately preceding round's statements
+    // and reacts (rebuttal, agreement, refinement); the last round is a closing statement.
+    for round_number in 2..=total_rounds {
+        let is_final = round_number == total_rounds;
+        let prev = previous_round.clone();
+
+        let prompt_for = |expert: &Expert| -> String {
+            let others_str = prev.iter()
                 .filter(|(id, _)| id != &expert.id)
-                .map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft))
+                .map(|(id, text)| format!("- Panelist [{}]:\n{}", id, text))
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            
-            let critique_prompt = format!(
-                "You are an expert panelist. Here is the original user query: \"{}\"\n\nOther panel experts have generated the following initial drafts:\n\n{}\n\nPlease critique the other drafts, highlighting omissions, errors, or improvements, and then output your updated and final revised response in a cohesive manner.",
-                prompt,
-                other_drafts_str
-            );
 
-            let handle = RUNTIME.spawn(async move {
-                cb.on_expert_critique_started(&expert.id);
-                
-                struct CritiqueStreamProxy {
-                    expert_id: String,
-                    cb: Arc<dyn CouncilCallback + 'static>,
-                    full_text: Mutex<String>,
-                }
-                
-                impl StreamCallback for CritiqueStreamProxy {
-                    fn on_chunk(&self, chunk: &str) {
-                        self.cb.on_expert_critique_chunk(&self.expert_id, chunk);
-                        if let Ok(mut text) = self.full_text.lock() {
-                            text.push_str(chunk);
-                        }
-                    }
-                    fn on_error(&self, error: &str) {
-                        self.cb.on_expert_critique_error(&self.expert_id, error);
-                    }
-                }
-                
-                let proxy = CritiqueStreamProxy {
-                    expert_id: expert.id.clone(),
-                    cb: cb.clone(),
-                    full_text: Mutex::new(String::new()),
-                };
-                
-                let provider = get_provider(&expert.config.provider_type);
-                match provider.generate_stream(&critique_prompt, &attachments, &history, &expert, &proxy).await {
-                    Ok(_) => {
-                        let full_response = {
-                            let text_lock = proxy.full_text.lock().unwrap();
-                            text_lock.clone()
-                        };
-                        cb.on_expert_critique_completed(&expert.id, &full_response);
-                        Ok((expert.id.clone(), full_response))
-                    }
-                    Err(e) => {
-                        cb.on_expert_critique_error(&expert.id, &e.to_string());
-                        Err(e)
-                    }
-                }
-            });
-            critique_handles.push(handle);
-        }
-
-        let mut revised_drafts = Vec::new();
-        for handle in critique_handles {
-            match handle.await {
-                Ok(Ok((expert_id, response))) => {
-                    revised_drafts.push((expert_id.clone(), response.clone()));
-                    expert_critiques.push((expert_id, response));
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Expert critique error: {:?}", e);
-                }
-                Err(e) => {
-                    eprintln!("Tokio task join error: {:?}", e);
-                }
+            if is_final {
+                format!(
+                    "{}\n\nThis is the FINAL round ({} of {}) of the panel discussion. Give your CLOSING STATEMENT. Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nWrap up your position now — this is the last thing you'll say.",
+                    style_instruction, round_number, total_rounds, others_str, prompt
+                )
+            } else {
+                format!(
+                    "{}\n\nThis is round {} of {} of the panel discussion. Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nRespond with a rebuttal, agreement, or refinement of your position based on what you just read.",
+                    style_instruction, round_number, total_rounds, others_str, prompt
+                )
             }
-        }
-        if !revised_drafts.is_empty() {
-            final_expert_drafts = revised_drafts;
+        };
+
+        let round_results = run_expert_round(
+            council, attachments, history, &callback,
+            round_number, is_final, false,
+            prompt_for,
+        ).await;
+
+        if !round_results.is_empty() {
+            previous_round = round_results;
         }
     }
-    
-    // 3. Chairman Synthesis Phase
+
+    // Chairman Synthesis Phase — synthesizes from the closing round's statements.
     callback.on_chairman_started();
-    
+
     let mut compiled_history = history.to_vec();
-    for (expert_id, draft) in &final_expert_drafts {
+    for (expert_id, text) in &previous_round {
         compiled_history.push(Message {
-            id: format!("msg_revised_draft_{}", expert_id),
+            id: format!("msg_closing_{}", expert_id),
             role: Role::ExpertDraft { expert_id: expert_id.clone() },
-            content: draft.clone(),
+            content: text.clone(),
             timestamp: 0,
         });
     }
 
-    for (expert_id, critique) in &expert_critiques {
-        compiled_history.push(Message {
-            id: format!("msg_critique_{}", expert_id),
-            role: Role::ExpertCritique { expert_id: expert_id.clone() },
-            content: critique.clone(),
-            timestamp: 0,
-        });
-    }
-    
     let synthesis_prompt = format!(
-        "The original user query is: \"{}\"\n\nHere are the final revised drafts and critiques generated by the active expert council:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
+        "The original user query is: \"{}\"\n\nHere are the closing statements from the {}-round expert panel discussion:\n\n{}\n\nPlease synthesize a final, cohesive, and comprehensive response answering the user query.",
         prompt,
-        final_expert_drafts.iter().map(|(id, draft)| format!("- Expert [{}]:\n{}", id, draft)).collect::<Vec<_>>().join("\n\n")
+        total_rounds,
+        previous_round.iter().map(|(id, text)| format!("- Expert [{}]:\n{}", id, text)).collect::<Vec<_>>().join("\n\n")
     );
-    
+
     struct ChairmanStreamProxy {
         cb: Arc<dyn CouncilCallback + 'static>,
         full_text: Mutex<String>,
     }
-    
+
     impl StreamCallback for ChairmanStreamProxy {
         fn on_chunk(&self, chunk: &str) {
             self.cb.on_chairman_chunk(chunk);
@@ -1130,12 +1132,12 @@ pub async fn run_council_flow(
             self.cb.on_chairman_error(error);
         }
     }
-    
+
     let proxy = ChairmanStreamProxy {
         cb: callback.clone(),
         full_text: Mutex::new(String::new()),
     };
-    
+
     let chairman_provider = get_provider(&council.chairman.config.provider_type);
     match chairman_provider.generate_stream(&synthesis_prompt, &[], &compiled_history, &council.chairman, &proxy).await {
         Ok(_) => {
@@ -1537,16 +1539,16 @@ mod tests {
         }
         fn on_expert_error(&self, _expert_id: &str, _error: &str) {}
 
-        fn on_expert_critique_started(&self, expert_id: &str) {
+        fn on_expert_critique_started(&self, expert_id: &str, _round_number: u32, _is_final_round: bool) {
             self.started_critiques.lock().unwrap().push(expert_id.to_string());
         }
-        fn on_expert_critique_chunk(&self, _expert_id: &str, chunk: &str) {
+        fn on_expert_critique_chunk(&self, _expert_id: &str, _round_number: u32, chunk: &str) {
             self.chunks.lock().unwrap().push(chunk.to_string());
         }
-        fn on_expert_critique_completed(&self, expert_id: &str, _full_critique: &str) {
+        fn on_expert_critique_completed(&self, expert_id: &str, _round_number: u32, _is_final_round: bool, _full_critique: &str) {
             self.completed_critiques.lock().unwrap().push(expert_id.to_string());
         }
-        fn on_expert_critique_error(&self, _expert_id: &str, _error: &str) {}
+        fn on_expert_critique_error(&self, _expert_id: &str, _round_number: u32, _error: &str) {}
 
         fn on_chairman_started(&self) {}
         fn on_chairman_chunk(&self, chunk: &str) {
@@ -1605,6 +1607,8 @@ mod tests {
                 system_prompt: "you are the chairman".to_string(),
             },
             critique_rounds: 1,
+            rounds: 2,
+            max_response_words: 300,
         };
 
         let callback = Arc::new(MockCouncilCallback {

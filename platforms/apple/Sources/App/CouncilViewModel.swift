@@ -28,6 +28,7 @@ struct CodableMessage: Codable, Identifiable {
     var timestamp: UInt64
     var attachedImagePaths: [String]?
     var speakerName: String? // display name for expert-draft/expert-critique bubbles
+    var stageLabel: String? // "Opening Statement", "Round 2", "Closing Statement", etc.
 }
 
 class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback {
@@ -43,6 +44,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
     
     // Config values
     @Published var enableCritique: Bool = true
+
+    // Panel discussion rounds: round 1 is the opening statement, the last round is the
+    // closing statement, anything in between is a reaction round. Minimum 2.
+    @Published var councilRounds: Int = 3 {
+        didSet {
+            if councilRounds < 2 { councilRounds = 2 }
+            UserDefaults.standard.set(councilRounds, forKey: "councilRounds")
+        }
+    }
     
     // Workspace Directory Integration (Milestone 7)
     @Published var workspacePath: String = ""
@@ -145,6 +155,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         // Load active expert count
         if let savedCount = UserDefaults.standard.object(forKey: "activeExpertCount") as? Int {
             self.activeExpertCount = savedCount
+        }
+
+        // Load council discussion round count
+        if let savedRounds = UserDefaults.standard.object(forKey: "councilRounds") as? Int {
+            self.councilRounds = max(2, savedRounds)
         }
         
         // Load workspace path
@@ -376,7 +391,8 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                     role: "expert-draft",
                     content: fullResponse,
                     timestamp: UInt64(Date().timeIntervalSince1970),
-                    speakerName: state.name
+                    speakerName: state.name,
+                    stageLabel: "Opening Statement"
                 ))
                 self.saveSession()
             }
@@ -393,8 +409,8 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         }
     }
     
-    // ── Critique Phase Callbacks ──
-    func onExpertCritiqueStarted(expertId: String) {
+    // ── Later-Round Callbacks (round 2 through the closing round) ──
+    func onExpertCritiqueStarted(expertId: String, roundNumber: UInt32, isFinalRound: Bool) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
                 state.critiqueStatus = "drafting"
@@ -404,8 +420,8 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             }
         }
     }
-    
-    func onExpertCritiqueChunk(expertId: String, chunk: String) {
+
+    func onExpertCritiqueChunk(expertId: String, roundNumber: UInt32, chunk: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
                 state.critiqueResponse += chunk
@@ -413,8 +429,8 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             }
         }
     }
-    
-    func onExpertCritiqueCompleted(expertId: String, fullCritique: String) {
+
+    func onExpertCritiqueCompleted(expertId: String, roundNumber: UInt32, isFinalRound: Bool, fullCritique: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
                 state.critiqueStatus = "completed"
@@ -426,14 +442,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
                     role: "expert-critique",
                     content: fullCritique,
                     timestamp: UInt64(Date().timeIntervalSince1970),
-                    speakerName: state.name
+                    speakerName: state.name,
+                    stageLabel: isFinalRound ? "Closing Statement" : "Round \(roundNumber)"
                 ))
                 self.saveSession()
             }
         }
     }
-    
-    func onExpertCritiqueError(expertId: String, error: String) {
+
+    func onExpertCritiqueError(expertId: String, roundNumber: UInt32, error: String) {
         DispatchQueue.main.async {
             if var state = self.expertStates[expertId] {
                 state.critiqueStatus = "error"
@@ -581,12 +598,17 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
             input: chairmanConfig
         )
         
+        let storedMaxWords = UserDefaults.standard.object(forKey: "maxResponseWords") as? Int
+        let maxResponseWords = max(100, storedMaxWords ?? 300)
+
         let council = FfiCouncil(
             id: "panel-development",
             name: "Software Architecture Council",
             experts: activeExperts,
             chairman: chairman,
-            critiqueRounds: enableCritique ? 1 : 0
+            critiqueRounds: enableCritique ? 1 : 0,
+            rounds: UInt32(max(2, councilRounds)),
+            maxResponseWords: UInt32(maxResponseWords)
         )
         
         let currentPrompt = prompt
