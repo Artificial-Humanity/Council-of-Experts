@@ -3,9 +3,12 @@ import CouncilOfExpertsKit
 
 struct ContentView: View {
     @StateObject private var viewModel = CouncilViewModel()
-    
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var draftingGridHeight: CGFloat = 130
+    @State private var draftingGridDragStartHeight: CGFloat?
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             // Sidebar controls
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -217,6 +220,18 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // Header Bar
                 HStack {
+                    Button(action: {
+                        withAnimation {
+                            columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
+                        }
+                    }) {
+                        Image(systemName: "sidebar.left")
+                            .font(.title3)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle Sidebar")
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Council of Experts")
                             .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -284,9 +299,9 @@ struct ContentView: View {
                     }
                 }
                 .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
-                
-                Divider()
-                
+
+                VerticalResizeHandle(height: $draftingGridHeight, dragStartHeight: $draftingGridDragStartHeight, minHeight: 60, maxHeight: 400)
+
                 // Collapsible active grid showing expert drafting progress
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -328,7 +343,7 @@ struct ContentView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 8)
                     }
-                    .frame(maxHeight: viewModel.activeExpertCount > 2 ? 130 : 84)
+                    .frame(height: draftingGridHeight)
                 }
                 .background(.thinMaterial)
                 
@@ -487,6 +502,43 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 950, minHeight: 700)
+    }
+}
+
+// A draggable divider that resizes the pane below it by adjusting a bound height.
+struct VerticalResizeHandle: View {
+    @Binding var height: CGFloat
+    @Binding var dragStartHeight: CGFloat?
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+
+    var body: some View {
+        ZStack {
+            Divider()
+            Capsule()
+                .fill(Color.secondary.opacity(0.4))
+                .frame(width: 36, height: 4)
+        }
+        .frame(height: 8)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let base = dragStartHeight ?? height
+                    if dragStartHeight == nil { dragStartHeight = height }
+                    height = min(maxHeight, max(minHeight, base - value.translation.height))
+                }
+                .onEnded { _ in
+                    dragStartHeight = nil
+                }
+        )
     }
 }
 
