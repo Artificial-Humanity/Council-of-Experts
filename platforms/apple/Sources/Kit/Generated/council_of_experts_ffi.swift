@@ -2006,6 +2006,28 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     }
 }
 
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 fileprivate struct FfiConverterSequenceTypeFfiAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [FfiAttachment]
 
@@ -2173,6 +2195,20 @@ public func generateExpertStream(prompt: String, attachments: [FfiAttachment], h
             errorHandler: FfiConverterTypeFfiPanelError.lift
         )
 }
+public func listAvailableModels(config: FfiProviderConfig)async throws  -> [String] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_council_of_experts_ffi_fn_func_list_available_models(FfiConverterTypeFfiProviderConfig.lower(config)
+                )
+            },
+            pollFunc: ffi_council_of_experts_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_council_of_experts_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_council_of_experts_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
+            errorHandler: FfiConverterTypeFfiPanelError.lift
+        )
+}
 public func verifyFfiBridge() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_council_of_experts_ffi_fn_func_verify_ffi_bridge($0
@@ -2205,6 +2241,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_func_generate_expert_stream() != 30516) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_council_of_experts_ffi_checksum_func_list_available_models() != 26402) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_func_verify_ffi_bridge() != 30466) {

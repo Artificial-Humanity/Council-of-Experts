@@ -462,63 +462,58 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         }
     }
     
-    private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput) -> FfiExpert {
-        let ffiType: FfiProviderType
-        let modelName: String
-        let apiKey: String?
-        let baseUrl: String?
-        
-        switch input.providerType {
+    // Resolves an app-facing provider type string into the FFI provider type,
+    // effective model name, stored API key, and effective base URL. Shared by
+    // request building and by the "fetch available models" probe so the two
+    // stay in sync.
+    static func resolveProviderDetails(providerType: String, modelName: String, baseUrl: String) -> (type: FfiProviderType, modelName: String, apiKey: String?, baseUrl: String?) {
+        switch providerType {
         case "Mock Sandbox":
-            ffiType = .mock
-            modelName = input.modelName.isEmpty ? "mock-model" : input.modelName
-            apiKey = nil
-            baseUrl = nil
+            return (.mock, modelName.isEmpty ? "mock-model" : modelName, nil, nil)
         case "Anthropic Claude":
-            ffiType = .anthropic
-            modelName = input.modelName.isEmpty ? "claude-3-5-sonnet-latest" : input.modelName
             let key = UserDefaults.standard.string(forKey: "anthropicKey") ?? ""
-            apiKey = key.isEmpty ? nil : key
-            baseUrl = nil
+            return (.anthropic, modelName.isEmpty ? "claude-3-5-sonnet-latest" : modelName, key.isEmpty ? nil : key, nil)
         case "OpenAI GPT":
-            ffiType = .openAi
-            modelName = input.modelName.isEmpty ? "gpt-4o" : input.modelName
             let key = UserDefaults.standard.string(forKey: "openAiKey") ?? ""
-            apiKey = key.isEmpty ? nil : key
-            baseUrl = nil
+            return (.openAi, modelName.isEmpty ? "gpt-4o" : modelName, key.isEmpty ? nil : key, nil)
         case "Google Gemini":
-            ffiType = .gemini
-            modelName = input.modelName.isEmpty ? "gemini-1.5-pro" : input.modelName
             let key = UserDefaults.standard.string(forKey: "geminiKey") ?? ""
-            apiKey = key.isEmpty ? nil : key
-            baseUrl = nil
+            return (.gemini, modelName.isEmpty ? "gemini-1.5-pro" : modelName, key.isEmpty ? nil : key, nil)
         case "xAI Grok":
-            ffiType = .grok
-            modelName = input.modelName.isEmpty ? "grok-2" : input.modelName
             let key = UserDefaults.standard.string(forKey: "grokKey") ?? ""
-            apiKey = key.isEmpty ? nil : key
-            baseUrl = nil
+            return (.grok, modelName.isEmpty ? "grok-2" : modelName, key.isEmpty ? nil : key, nil)
         case "Local Ollama/LM Studio":
-            ffiType = .localOpenAiCompatible
-            modelName = input.modelName.isEmpty ? "llama3" : input.modelName
-            apiKey = nil
-            baseUrl = input.baseUrl.isEmpty ? "http://localhost:11434/v1" : input.baseUrl
+            return (.localOpenAiCompatible, modelName.isEmpty ? "llama3" : modelName, nil, baseUrl.isEmpty ? "http://localhost:11434/v1" : baseUrl)
         default:
-            ffiType = .mock
-            modelName = "mock-model"
-            apiKey = nil
-            baseUrl = nil
+            return (.mock, "mock-model", nil, nil)
         }
-        
+    }
+
+    // Builds a probe config (no model name required) for querying a provider's model list.
+    static func probeConfig(providerType: String, baseUrl: String) -> FfiProviderConfig {
+        let resolved = resolveProviderDetails(providerType: providerType, modelName: "", baseUrl: baseUrl)
+        return FfiProviderConfig(
+            name: "probe",
+            providerType: resolved.type,
+            modelName: resolved.modelName,
+            baseUrl: resolved.baseUrl,
+            apiKey: resolved.apiKey,
+            temperature: nil
+        )
+    }
+
+    private func buildFfiExpert(id: String, defaultName: String, input: ExpertConfigInput) -> FfiExpert {
+        let resolved = CouncilViewModel.resolveProviderDetails(providerType: input.providerType, modelName: input.modelName, baseUrl: input.baseUrl)
+
         return FfiExpert(
             id: id,
-            name: "\(defaultName) (\(modelName))",
+            name: "\(defaultName) (\(resolved.modelName))",
             config: FfiProviderConfig(
                 name: defaultName,
-                providerType: ffiType,
-                modelName: modelName,
-                baseUrl: baseUrl,
-                apiKey: apiKey,
+                providerType: resolved.type,
+                modelName: resolved.modelName,
+                baseUrl: resolved.baseUrl,
+                apiKey: resolved.apiKey,
                 temperature: 0.7
             ),
             systemPrompt: input.systemPrompt

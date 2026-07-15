@@ -1,4 +1,5 @@
 import SwiftUI
+import CouncilOfExpertsKit
 
 struct ContentView: View {
     @StateObject private var viewModel = CouncilViewModel()
@@ -477,7 +478,36 @@ struct ContentView: View {
 struct ExpertConfigSection: View {
     let title: String
     @Binding var config: ExpertConfigInput
-    
+
+    @State private var fetchedModels: [String] = []
+    @State private var isFetchingModels: Bool = false
+    @State private var fetchError: String?
+
+    private func fetchModels() {
+        isFetchingModels = true
+        fetchError = nil
+        let probeConfig = CouncilViewModel.probeConfig(providerType: config.providerType, baseUrl: config.baseUrl)
+
+        Task {
+            do {
+                let models = try await listAvailableModels(config: probeConfig)
+                await MainActor.run {
+                    isFetchingModels = false
+                    fetchedModels = models
+                    if models.isEmpty {
+                        fetchError = "No models returned"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isFetchingModels = false
+                    fetchedModels = []
+                    fetchError = error.localizedDescription
+                }
+            }
+        }
+    }
+
     var body: some View {
         DisclosureGroup(title) {
             VStack(alignment: .leading, spacing: 8) {
@@ -499,13 +529,53 @@ struct ExpertConfigSection: View {
                     Text("Local Model").tag("Local Ollama/LM Studio")
                 }
                 .pickerStyle(.menu)
-                
+                .onChange(of: config.providerType) {
+                    fetchedModels = []
+                    fetchError = nil
+                }
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Model Name:")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
-                    TextField("e.g. llama3", text: $config.modelName)
-                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 6) {
+                        TextField("e.g. llama3", text: $config.modelName)
+                            .textFieldStyle(.roundedBorder)
+
+                        if !fetchedModels.isEmpty {
+                            Menu {
+                                ForEach(fetchedModels, id: \.self) { model in
+                                    Button(model) {
+                                        config.modelName = model
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "list.bullet")
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .help("Pick from the models returned by the provider")
+                        }
+
+                        Button {
+                            fetchModels()
+                        } label: {
+                            if isFetchingModels {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(isFetchingModels || config.providerType == "Mock Sandbox")
+                        .help("Query the provider for available models")
+                    }
+                    if let fetchError {
+                        Text(fetchError)
+                            .font(.system(size: 9))
+                            .foregroundColor(.red)
+                    }
                 }
                 
                 if config.providerType == "Local Ollama/LM Studio" {

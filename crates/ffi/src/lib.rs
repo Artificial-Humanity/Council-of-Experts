@@ -247,6 +247,17 @@ pub fn verify_ffi_bridge() -> String {
 }
 
 #[uniffi::export]
+pub async fn list_available_models(config: FfiProviderConfig) -> Result<Vec<String>, FfiPanelError> {
+    let core_config = map_provider_config(config);
+    // Run on the shared Tokio runtime — reqwest's connection pool needs a reactor,
+    // which isn't guaranteed to be present on whatever thread UniFFI polls this on.
+    core::RUNTIME.spawn(async move { core::list_models(&core_config).await })
+        .await
+        .map_err(|e| FfiPanelError::Unknown { message: e.to_string() })?
+        .map_err(map_error)
+}
+
+#[uniffi::export]
 pub async fn generate_expert_response(
     prompt: String,
     attachments: Vec<FfiAttachment>,

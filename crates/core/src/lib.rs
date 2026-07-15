@@ -809,6 +809,111 @@ pub fn get_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
     }
 }
 
+// ── Model Discovery ──
+pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelError> {
+    let client = reqwest::Client::new();
+
+    match config.provider_type {
+        ProviderType::Mock => Ok(vec!["mock-model".to_string()]),
+
+        ProviderType::Anthropic => {
+            let api_key = config.api_key.clone()
+                .ok_or_else(|| PanelError::ConfigError("Missing API key".to_string()))?;
+
+            let mut headers = HeaderMap::new();
+            headers.insert("x-api-key", HeaderValue::from_str(&api_key)
+                .map_err(|e| PanelError::ConfigError(e.to_string()))?);
+            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+            let res = client.get("https://api.anthropic.com/v1/models?limit=1000")
+                .headers(headers)
+                .send()
+                .await
+                .map_err(|e| PanelError::ApiError(e.to_string()))?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                return Err(PanelError::ApiError(format!("Anthropic models list status: {}, body: {}", status, text)));
+            }
+
+            let json: serde_json::Value = res.json().await
+                .map_err(|e| PanelError::SerializationError(e.to_string()))?;
+
+            let mut ids: Vec<String> = json["data"].as_array()
+                .map(|arr| arr.iter().filter_map(|m| m["id"].as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            ids.sort();
+            Ok(ids)
+        }
+
+        ProviderType::Gemini => {
+            let api_key = config.api_key.clone()
+                .ok_or_else(|| PanelError::ConfigError("Missing API key".to_string()))?;
+
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models?key={}&pageSize=1000", api_key);
+            let res = client.get(&url)
+                .send()
+                .await
+                .map_err(|e| PanelError::ApiError(e.to_string()))?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                return Err(PanelError::ApiError(format!("Gemini models list status: {}, body: {}", status, text)));
+            }
+
+            let json: serde_json::Value = res.json().await
+                .map_err(|e| PanelError::SerializationError(e.to_string()))?;
+
+            let mut ids: Vec<String> = json["models"].as_array()
+                .map(|arr| arr.iter().filter_map(|m| {
+                    m["name"].as_str().map(|s| s.trim_start_matches("models/").to_string())
+                }).collect())
+                .unwrap_or_default();
+            ids.sort();
+            Ok(ids)
+        }
+
+        ProviderType::OpenAi | ProviderType::Grok | ProviderType::LocalOpenAiCompatible => {
+            let default_url = match config.provider_type {
+                ProviderType::Grok => "https://api.x.ai/v1".to_string(),
+                ProviderType::LocalOpenAiCompatible => "http://localhost:11434/v1".to_string(),
+                _ => "https://api.openai.com/v1".to_string(),
+            };
+            let base_url = config.base_url.clone().unwrap_or(default_url);
+            let url = format!("{}/models", base_url);
+
+            let mut headers = HeaderMap::new();
+            if let Some(ref key) = config.api_key {
+                headers.insert("Authorization", HeaderValue::from_str(&format!("Bearer {}", key))
+                    .map_err(|e| PanelError::ConfigError(e.to_string()))?);
+            }
+
+            let res = client.get(&url)
+                .headers(headers)
+                .send()
+                .await
+                .map_err(|e| PanelError::ApiError(e.to_string()))?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                return Err(PanelError::ApiError(format!("Models list status: {}, body: {}", status, text)));
+            }
+
+            let json: serde_json::Value = res.json().await
+                .map_err(|e| PanelError::SerializationError(e.to_string()))?;
+
+            let mut ids: Vec<String> = json["data"].as_array()
+                .map(|arr| arr.iter().filter_map(|m| m["id"].as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            ids.sort();
+            Ok(ids)
+        }
+    }
+}
+
 // ── Council Flow Orchestration ──
 pub async fn run_council_flow(
     prompt: &str,
