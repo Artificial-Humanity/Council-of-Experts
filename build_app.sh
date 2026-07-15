@@ -24,7 +24,7 @@ cp "platforms/apple/.build/release/CouncilOfExpertsApp" "$MACOS_DIR/CouncilOfExp
 
 echo "==> Copying linked frameworks..."
 # Copy the macOS framework from xcframework target
-cp -R "platforms/apple/council_of_experts_ffiFFI.xcframework/macos-arm64/council_of_experts_ffiFFI.framework" "$FRAMEWORKS_DIR/"
+cp -R "build/frameworks/council_of_experts_ffiFFI.xcframework/macos-arm64/council_of_experts_ffiFFI.framework" "$FRAMEWORKS_DIR/"
 
 echo "==> Generating Info.plist..."
 cat <<EOF > "$CONTENTS_DIR/Info.plist"

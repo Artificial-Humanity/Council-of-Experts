@@ -12,8 +12,8 @@ fi
 
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
-OUT="$ROOT/platforms/apple"
-GEN_SWIFT="$OUT/Sources/Kit/Generated"
+GEN_SWIFT="$ROOT/platforms/apple/Sources/Kit/Generated"
+OUT="$ROOT/build/frameworks"
 FFI_HEADERS="$OUT/FFIHeaders"
 STAGING="$ROOT/.build_frameworks"
 

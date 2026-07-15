@@ -15,7 +15,7 @@ let package = Package(
         // FFI Binary target
         .binaryTarget(
             name: "council_of_experts_ffiFFI",
-            path: "council_of_experts_ffiFFI.xcframework"
+            path: "../../build/frameworks/council_of_experts_ffiFFI.xcframework"
         ),
         
         // Swift wrapper module
