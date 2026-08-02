@@ -50,7 +50,11 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
     // closing statement, anything in between is a reaction round. Minimum 2.
     @Published var councilRounds: Int = 3 {
         didSet {
-            if councilRounds < 2 { councilRounds = 2 }
+            let clamped = min(max(2, councilRounds), 10)
+            if councilRounds != clamped {
+                councilRounds = clamped
+                return
+            }
             UserDefaults.standard.set(councilRounds, forKey: "councilRounds")
         }
     }
@@ -77,8 +81,15 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
     @Published var attachedImages: [URL] = []
     
     // Dynamic expert configuration settings (Limit of 8 active experts)
+    // Indexes directly into expertsConfig, so it must never exceed that array's size — an
+    // out-of-range value restored from a stale defaults plist would crash the drafting grid.
     @Published var activeExpertCount: Int = 2 {
         didSet {
+            let clamped = min(max(1, activeExpertCount), expertsConfig.count)
+            if activeExpertCount != clamped {
+                activeExpertCount = clamped
+                return
+            }
             UserDefaults.standard.set(activeExpertCount, forKey: "activeExpertCount")
         }
     }
@@ -147,12 +158,12 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         
         // Load active expert count
         if let savedCount = UserDefaults.standard.object(forKey: "activeExpertCount") as? Int {
-            self.activeExpertCount = savedCount
+            self.activeExpertCount = min(max(1, savedCount), expertsConfig.count)
         }
 
         // Load council discussion round count
         if let savedRounds = UserDefaults.standard.object(forKey: "councilRounds") as? Int {
-            self.councilRounds = max(2, savedRounds)
+            self.councilRounds = min(max(2, savedRounds), 10)
         }
         
         // Load workspace path
@@ -231,31 +242,60 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         }
     }
     
+    // Build outputs and vendored dependencies: pointing the picker at any real project
+    // otherwise buries its source files under thousands of generated ones.
+    private static let ignoredDirectories: Set<String> = [
+        ".git", ".hg", ".svn", ".build", "build", "target", "DerivedData",
+        "node_modules", "vendor", "Pods", "dist", "out",
+        "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache",
+        ".next", ".nuxt", ".parcel-cache", ".gradle", ".idea", ".cache"
+    ]
+
+    private static let binaryExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "ico", "icns", "pdf",
+        "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+        "dylib", "a", "so", "exe", "bin", "o", "obj", "d",
+        "app", "framework", "xcframework", "swiftmodule", "swiftdoc", "swiftsourceinfo",
+        "mp3", "mp4", "mov", "wav", "avi", "woff", "woff2", "ttf", "otf",
+        "db", "sqlite", "pyc", "class", "jar"
+    ]
+
+    // Files larger than this are indexed but not inlined into a prompt — a single large
+    // file can cost more than the rest of the conversation combined.
+    private static let maxAttachedFileBytes = 256 * 1024
+
     func refreshFiles() {
         guard !workspacePath.isEmpty else {
             self.scannedFiles = []
             return
         }
-        
+
         let path = workspacePath
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
             let url = URL(fileURLWithPath: path)
-            guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+            guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
                 DispatchQueue.main.async {
                     self.scannedFiles = []
                 }
                 return
             }
-            
+
             var files: [URL] = []
             for case let fileURL as URL in enumerator {
                 do {
-                    let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+                    let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+
+                    if resourceValues.isDirectory ?? false {
+                        if Self.ignoredDirectories.contains(fileURL.lastPathComponent) {
+                            enumerator.skipDescendants()
+                        }
+                        continue
+                    }
+
                     if resourceValues.isRegularFile ?? false {
                         let ext = fileURL.pathExtension.lowercased()
-                        let binaryExtensions = ["png", "jpg", "jpeg", "gif", "pdf", "zip", "tar", "gz", "dylib", "a", "so", "exe", "app", "framework", "xcframework", "o", "d", "swiftmodule", "swiftdoc"]
-                        if !binaryExtensions.contains(ext) {
+                        if !Self.binaryExtensions.contains(ext) {
                             files.append(fileURL)
                         }
                     }
@@ -332,6 +372,12 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         DispatchQueue.main.async {
             self.buildStatusLog += "📁 Wrote file to workspace: \(path)\n"
             self.refreshFiles() // Refresh indexed files view list
+        }
+    }
+
+    func onWorkspaceWarning(message: String) {
+        DispatchQueue.main.async {
+            self.buildStatusLog += "⚠️ \(message)\n"
         }
     }
     
@@ -480,16 +526,16 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         case "Mock Sandbox":
             return (.mock, modelName.isEmpty ? "mock-model" : modelName, nil, nil)
         case "Anthropic Claude":
-            let key = UserDefaults.standard.string(forKey: "anthropicKey") ?? ""
-            return (.anthropic, modelName.isEmpty ? "claude-3-5-sonnet-latest" : modelName, key.isEmpty ? nil : key, nil)
+            let key = KeychainStore.read("anthropicKey")
+            return (.anthropic, modelName.isEmpty ? "claude-sonnet-5" : modelName, key.isEmpty ? nil : key, nil)
         case "OpenAI GPT":
-            let key = UserDefaults.standard.string(forKey: "openAiKey") ?? ""
+            let key = KeychainStore.read("openAiKey")
             return (.openAi, modelName.isEmpty ? "gpt-4o" : modelName, key.isEmpty ? nil : key, nil)
         case "Google Gemini":
-            let key = UserDefaults.standard.string(forKey: "geminiKey") ?? ""
-            return (.gemini, modelName.isEmpty ? "gemini-1.5-pro" : modelName, key.isEmpty ? nil : key, nil)
+            let key = KeychainStore.read("geminiKey")
+            return (.gemini, modelName.isEmpty ? "gemini-2.5-pro" : modelName, key.isEmpty ? nil : key, nil)
         case "xAI Grok":
-            let key = UserDefaults.standard.string(forKey: "grokKey") ?? ""
+            let key = KeychainStore.read("grokKey")
             return (.grok, modelName.isEmpty ? "grok-2" : modelName, key.isEmpty ? nil : key, nil)
         case "Local Ollama/LM Studio":
             return (.localOpenAiCompatible, modelName.isEmpty ? "llama3" : modelName, nil, baseUrl.isEmpty ? "http://localhost:11434/v1" : baseUrl)
@@ -532,9 +578,17 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         )
     }
     
+    // Asks the core to stop after the in-flight requests settle. The rounds still in the
+    // queue are skipped, so a runaway discussion stops costing tokens immediately.
+    func stopRun() {
+        guard isExecuting else { return }
+        cancelActiveRun()
+        buildStatusLog += "🛑 Cancellation requested — finishing the current round.\n"
+    }
+
     func runCouncil() {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        
+
         isExecuting = true
         executionError = nil
         buildStatusLog = ""
@@ -585,10 +639,17 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         if !selectedFilePaths.isEmpty {
             decoratedPrompt += "Here are the selected files from the user's local workspace directory for your context:\n\n"
             var attachedRelativeNames: [String] = []
-            for path in selectedFilePaths {
+            // Sorted so the same selection produces the same prompt every turn, which keeps
+            // provider-side prompt caching effective.
+            for path in selectedFilePaths.sorted() {
                 let relativePath = path.replacingOccurrences(of: workspacePath + "/", with: "")
                 attachedRelativeNames.append(relativePath)
-                if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+
+                guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+                if content.utf8.count > Self.maxAttachedFileBytes {
+                    decoratedPrompt += "=== File: \(relativePath) ===\n[skipped: file is larger than \(Self.maxAttachedFileBytes / 1024) KB]\n\n"
+                } else {
                     decoratedPrompt += "=== File: \(relativePath) ===\n\(content)\n\n"
                 }
             }
@@ -622,10 +683,24 @@ class CouncilViewModel: ObservableObject, FfiCouncilCallback, FfiCodingCallback 
         // Clear media selections for next input
         attachedImages.removeAll()
         
-        let ffiHistory = messages.map { msg in
-            FfiMessage(
+        // Expert turns keep their author across the FFI so the core can label them. Without
+        // that, every panelist is handed every other panelist's words as its own prior turn.
+        let ffiHistory = messages.map { msg -> FfiMessage in
+            let role: FfiRole
+            switch msg.role {
+            case "user":
+                role = .user
+            case "expert-draft":
+                role = .expertDraft(expertId: msg.speakerName ?? "Expert")
+            case "expert-critique":
+                role = .expertCritique(expertId: msg.speakerName ?? "Expert")
+            default:
+                role = .assistant // legacy "chairman"/"assistant" sessions
+            }
+
+            return FfiMessage(
                 id: msg.id,
-                role: msg.role == "user" ? .user : .assistant,
+                role: role,
                 content: msg.content,
                 timestamp: msg.timestamp
             )

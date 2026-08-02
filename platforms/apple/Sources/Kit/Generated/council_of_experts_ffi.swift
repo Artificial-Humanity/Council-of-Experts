@@ -1134,6 +1134,8 @@ public protocol FfiCodingCallback : AnyObject {
     
     func onFileWrite(path: String) 
     
+    func onWorkspaceWarning(message: String) 
+    
     func onBuildStarted(command: String) 
     
     func onBuildCompleted(success: Bool, output: String) 
@@ -1269,6 +1271,30 @@ fileprivate struct UniffiCallbackInterfaceFfiCodingCallback {
                 }
                 return uniffiObj.onFileWrite(
                      path: try FfiConverterString.lift(path)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onWorkspaceWarning: { (
+            uniffiHandle: UInt64,
+            message: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiCodingCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onWorkspaceWarning(
+                     message: try FfiConverterString.lift(message)
                 )
             }
 
@@ -2021,6 +2047,11 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
+public func cancelActiveRun() {try! rustCall() {
+    uniffi_council_of_experts_ffi_fn_func_cancel_active_run($0
+    )
+}
+}
 public func executeCodingWorkflow(prompt: String, workspacePath: String, buildCommand: String, attachments: [FfiAttachment], history: [FfiMessage], council: FfiCouncil, callback: FfiCodingCallback)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
@@ -2113,6 +2144,9 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_council_of_experts_ffi_checksum_func_cancel_active_run() != 58325) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_council_of_experts_ffi_checksum_func_execute_coding_workflow() != 26467) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2146,10 +2180,13 @@ private var initializationResult: InitializationResult {
     if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_file_write() != 53571) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_build_started() != 22753) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_workspace_warning() != 52291) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_build_completed() != 25970) {
+    if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_build_started() != 22158) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_council_of_experts_ffi_checksum_method_fficodingcallback_on_build_completed() != 59347) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_council_of_experts_ffi_checksum_method_fficouncilcallback_on_expert_started() != 5804) {

@@ -4,6 +4,11 @@ import CouncilOfExpertsKit
 @main
 struct CouncilOfExpertsApp: App {
     init() {
+        // Must run before anything reads a credential: keys written by an earlier build
+        // live in UserDefaults, and requests are built straight from the Keychain, so a
+        // migration deferred until the user opens Settings would look like lost keys.
+        CredentialStore.accounts.forEach(KeychainStore.migrateFromUserDefaults)
+
         let verifyText = verifyFfiBridge()
         print("FFI Initialization Check: \(verifyText)")
     }
@@ -21,10 +26,7 @@ struct CouncilOfExpertsApp: App {
 }
 
 struct SettingsView: View {
-    @AppStorage("openAiKey") private var openAiKey = ""
-    @AppStorage("anthropicKey") private var anthropicKey = ""
-    @AppStorage("geminiKey") private var geminiKey = ""
-    @AppStorage("grokKey") private var grokKey = ""
+    @StateObject private var credentials = CredentialStore()
     @AppStorage("maxResponseWords") private var maxResponseWords = 300
     @AppStorage("enableThinkingNotes") private var enableThinkingNotes = false
 
@@ -35,31 +37,35 @@ struct SettingsView: View {
                     .font(.headline)
                     .foregroundColor(.secondary)
 
+                Text("Stored in your login Keychain.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text("OpenAI API Key:")
                         .font(.caption)
-                    SecureField("sk-...", text: $openAiKey)
+                    SecureField("sk-...", text: $credentials.openAiKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Anthropic API Key:")
                         .font(.caption)
-                    SecureField("sk-ant-...", text: $anthropicKey)
+                    SecureField("sk-ant-...", text: $credentials.anthropicKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Gemini API Key:")
                         .font(.caption)
-                    SecureField("AIzaSy...", text: $geminiKey)
+                    SecureField("AIzaSy...", text: $credentials.geminiKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Grok (xAI) API Key:")
                         .font(.caption)
-                    SecureField("xai-...", text: $grokKey)
+                    SecureField("xai-...", text: $credentials.grokKey)
                         .textFieldStyle(.roundedBorder)
                 }
 

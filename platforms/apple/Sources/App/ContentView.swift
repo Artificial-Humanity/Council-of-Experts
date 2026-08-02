@@ -1,6 +1,15 @@
 import SwiftUI
 import CouncilOfExpertsKit
 
+// Read from the bundle rather than hardcoded, so the badge can't drift from what shipped.
+// build_app.sh writes CFBundleShortVersionString; a `swift run` build has no bundle.
+let appVersion: String = {
+    guard let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else {
+        return "dev"
+    }
+    return "v\(version)"
+}()
+
 struct ContentView: View {
     @StateObject private var viewModel = CouncilViewModel()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -236,7 +245,7 @@ struct ContentView: View {
                             .foregroundColor(viewModel.isAgentCodingMode ? .purple : .secondary)
                     }
                     Spacer()
-                    Text("v0.8.0")
+                    Text(appVersion)
                         .font(.caption2)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -454,18 +463,33 @@ struct ContentView: View {
                                 .help("Attach Image")
                                 .disabled(viewModel.isExecuting)
                                 
-                                Button(action: {
-                                    viewModel.runCouncil()
-                                }) {
-                                    HStack {
-                                        Image(systemName: "paperplane.fill")
-                                        Text("Send")
+                                if viewModel.isExecuting {
+                                    Button(action: {
+                                        viewModel.stopRun()
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "stop.fill")
+                                            Text("Stop")
+                                        }
+                                        .frame(width: 100)
                                     }
-                                    .frame(width: 100)
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.red)
+                                    .help("Stop after the current round instead of running the rest")
+                                } else {
+                                    Button(action: {
+                                        viewModel.runCouncil()
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "paperplane.fill")
+                                            Text("Send")
+                                        }
+                                        .frame(width: 100)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.purple)
+                                    .disabled(viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(Color.purple)
-                                .disabled(viewModel.isExecuting || viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
                             
                             Button(action: {

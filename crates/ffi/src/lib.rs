@@ -251,6 +251,13 @@ pub async fn list_available_models(config: FfiProviderConfig) -> Result<Vec<Stri
         .map_err(map_error)
 }
 
+// Stops an in-flight council run. Safe to call when nothing is running; the next run
+// clears the flag as it starts.
+#[uniffi::export]
+pub fn cancel_active_run() {
+    core::request_cancel();
+}
+
 #[uniffi::export]
 pub async fn generate_expert_response(
     prompt: String,
@@ -261,11 +268,16 @@ pub async fn generate_expert_response(
     let core_expert = map_expert(expert);
     let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
     let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
-    let provider = core::get_provider(&core_expert.config.provider_type);
-    
-    provider.generate(&prompt, &core_attachments, &core_history, &core_expert)
-        .await
-        .map_err(map_error)
+
+    // Run on the shared Tokio runtime — reqwest needs a reactor, which isn't guaranteed on
+    // whatever thread UniFFI polls this from (same reason as list_available_models).
+    core::RUNTIME.spawn(async move {
+        let provider = core::get_provider(&core_expert.config.provider_type);
+        provider.generate(&prompt, &core_attachments, &core_history, &core_expert).await
+    })
+    .await
+    .map_err(|e| FfiPanelError::Unknown { message: e.to_string() })?
+    .map_err(map_error)
 }
 
 #[uniffi::export]
@@ -279,15 +291,22 @@ pub async fn generate_expert_stream(
     let core_expert = map_expert(expert);
     let core_attachments: Vec<core::Attachment> = attachments.into_iter().map(map_attachment).collect();
     let core_history: Vec<core::Message> = history.into_iter().map(map_message).collect();
-    let provider = core::get_provider(&core_expert.config.provider_type);
-    let proxy = FfiCallbackProxy { callback };
 
-    provider.generate_stream(&prompt, &core_attachments, &core_history, &core_expert, &proxy)
-        .await
-        .map_err(map_error)?;
+    // See generate_expert_response above.
+    core::RUNTIME.spawn(async move {
+        let provider = core::get_provider(&core_expert.config.provider_type);
+        let proxy = FfiCallbackProxy { callback };
 
-    proxy.callback.on_complete();
-    Ok(())
+        provider
+            .generate_stream(&prompt, &core_attachments, &core_history, &core_expert, &proxy)
+            .await?;
+
+        proxy.callback.on_complete();
+        Ok::<(), core::PanelError>(())
+    })
+    .await
+    .map_err(|e| FfiPanelError::Unknown { message: e.to_string() })?
+    .map_err(map_error)
 }
 
 #[uniffi::export]
@@ -316,6 +335,7 @@ pub trait FfiCodingCallback: Send + Sync {
     fn on_expert_error(&self, expert_id: String, error: String);
 
     fn on_file_write(&self, path: String);
+    fn on_workspace_warning(&self, message: String);
     fn on_build_started(&self, command: String);
     fn on_build_completed(&self, success: bool, output: String);
 }
@@ -340,6 +360,9 @@ impl core::CodingCallback for FfiCodingCallbackProxy {
 
     fn on_file_write(&self, path: &str) {
         self.callback.on_file_write(path.to_string());
+    }
+    fn on_workspace_warning(&self, message: &str) {
+        self.callback.on_workspace_warning(message.to_string());
     }
     fn on_build_started(&self, command: &str) {
         self.callback.on_build_started(command.to_string());

@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use reqwest::header::{HeaderMap, HeaderValue};
 use futures_util::StreamExt;
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use once_cell::sync::Lazy;
 
 pub static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
@@ -11,6 +14,37 @@ pub static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
         .build()
         .unwrap()
 });
+
+// Connect is bounded tightly because a mistyped LAN base URL is the common failure.
+// A total timeout can't be used for streams — it can't tell a healthy long answer from a
+// stalled connection — so streams are bounded by the idle gap between chunks instead.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+// Set by the host app to stop an in-flight council run. Streaming loops check it between
+// chunks and the orchestrator checks it between rounds, so a cancel takes effect without
+// waiting for the remaining rounds to burn tokens.
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn request_cancel() {
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+pub fn clear_cancel() {
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+pub fn is_cancelled() -> bool {
+    CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub enum PanelError {
@@ -137,58 +171,154 @@ fn role_to_string(role: &Role) -> String {
     }
 }
 
+// Flattens a council session log into a strictly alternating user/assistant transcript.
+//
+// Three things have to happen here, and they're coupled enough to be worth one pass:
+//   * Every panelist's statement is attributed to its author. Without the label each model
+//     is handed every rival's words as its own prior turn, so it "remembers" saying things
+//     it never said.
+//   * Consecutive same-role turns are merged. A single council round emits one assistant
+//     message per expert, and the Anthropic Messages API rejects runs of same-role turns.
+//   * The transcript is trimmed to start at the first user turn, which both Anthropic and
+//     Gemini require.
+//
+// System-role entries are dropped: all three providers take the system prompt out-of-band.
+fn normalize_history(history: &[Message]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    for msg in history {
+        if let Role::System = msg.role {
+            continue;
+        }
+
+        let role = role_to_string(&msg.role);
+
+        // Skip anything before the conversation's first user turn.
+        if out.is_empty() && role != "user" {
+            continue;
+        }
+
+        let content = match &msg.role {
+            Role::ExpertDraft { expert_id } | Role::ExpertCritique { expert_id } => {
+                format!("[{}]: {}", expert_id, msg.content)
+            }
+            _ => msg.content.clone(),
+        };
+
+        match out.last_mut() {
+            Some((last_role, last_content)) if *last_role == role => {
+                last_content.push_str("\n\n");
+                last_content.push_str(&content);
+            }
+            _ => out.push((role, content)),
+        }
+    }
+
+    out
+}
+
+// Pulls complete lines out of a byte buffer, leaving any trailing partial line in place.
+//
+// The buffer is bytes rather than a String on purpose: a multi-byte UTF-8 character can
+// straddle two network chunks, and decoding each chunk as it arrives replaces the halves
+// with U+FFFD — visible as garbage in any non-ASCII stream.
+fn drain_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = buffer.drain(..=pos).collect();
+        lines.push(String::from_utf8_lossy(&line).into_owned());
+    }
+    lines
+}
+
+// Reads the next chunk of an SSE body, converting a cancel request or an over-long silence
+// into a stop rather than hanging the round forever.
+enum StreamStep {
+    Chunk(Vec<u8>),
+    Done,
+}
+
+async fn next_stream_chunk<S, B>(stream: &mut S, provider: &str) -> Result<StreamStep, PanelError>
+where
+    S: futures_util::Stream<Item = reqwest::Result<B>> + Unpin,
+    B: AsRef<[u8]>,
+{
+    if is_cancelled() {
+        return Ok(StreamStep::Done);
+    }
+    match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+        Ok(Some(Ok(chunk))) => Ok(StreamStep::Chunk(chunk.as_ref().to_vec())),
+        Ok(Some(Err(e))) => Err(PanelError::ApiError(e.to_string())),
+        Ok(None) => Ok(StreamStep::Done),
+        Err(_) => Err(PanelError::ApiError(format!(
+            "{} stream stalled: no data for {} seconds",
+            provider,
+            STREAM_IDLE_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
 // ── OpenAI Compatible Client ──
-#[derive(Default)]
 pub struct OpenAiCompatibleClient {
     pub client: reqwest::Client,
 }
 
-impl OpenAiCompatibleClient {
-    pub fn new() -> Self {
-        Self::default()
+impl Default for OpenAiCompatibleClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-#[async_trait::async_trait]
-impl LlmProvider for OpenAiCompatibleClient {
-    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+impl OpenAiCompatibleClient {
+    pub fn new() -> Self {
+        Self { client: http_client() }
+    }
+
+    fn endpoint(expert: &Expert) -> String {
         let default_url = match expert.config.provider_type {
             ProviderType::Grok => "https://api.x.ai/v1".to_string(),
             _ => "https://api.openai.com/v1".to_string(),
         };
         let base_url = expert.config.base_url.clone().unwrap_or(default_url);
-        let url = format!("{}/chat/completions", base_url);
-        
+        format!("{}/chat/completions", base_url)
+    }
+
+    fn headers(expert: &Expert) -> Result<HeaderMap, PanelError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/json"));
         if let Some(ref key) = expert.config.api_key {
-            headers.insert("Authorization", HeaderValue::from_str(&format!("Bearer {}", key))
-                .map_err(|e| PanelError::ConfigError(e.to_string()))?);
+            headers.insert(
+                "Authorization",
+                HeaderValue::from_str(&format!("Bearer {}", key))
+                    .map_err(|e| PanelError::ConfigError(e.to_string()))?,
+            );
         }
+        Ok(headers)
+    }
 
-        let mut messages = vec![
-            serde_json::json!({
-                "role": "system",
-                "content": expert.system_prompt
-            })
-        ];
+    // Temperature is intentionally omitted: several reasoning-tier models (gpt-5,
+    // gpt-5-mini, gpt-5-nano) reject any non-default value with a 400, and this app
+    // never exposed temperature as a user-configurable setting anyway.
+    fn body(
+        prompt: &str,
+        attachments: &[Attachment],
+        history: &[Message],
+        expert: &Expert,
+        stream: bool,
+    ) -> serde_json::Value {
+        let mut messages = vec![serde_json::json!({
+            "role": "system",
+            "content": expert.system_prompt
+        })];
 
-        for msg in history {
-            messages.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "content": msg.content
-            }));
+        for (role, content) in normalize_history(history) {
+            messages.push(serde_json::json!({ "role": role, "content": content }));
         }
 
         let user_content = if attachments.is_empty() {
             serde_json::json!(prompt)
         } else {
-            let mut content_parts = vec![
-                serde_json::json!({
-                    "type": "text",
-                    "text": prompt
-                })
-            ];
+            let mut content_parts = vec![serde_json::json!({ "type": "text", "text": prompt })];
             for att in attachments {
                 if att.mime_type.starts_with("image/") {
                     content_parts.push(serde_json::json!({
@@ -202,22 +332,26 @@ impl LlmProvider for OpenAiCompatibleClient {
             serde_json::json!(content_parts)
         };
 
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": user_content
-        }));
+        messages.push(serde_json::json!({ "role": "user", "content": user_content }));
 
-        // Temperature is intentionally omitted: several reasoning-tier models (gpt-5,
-        // gpt-5-mini, gpt-5-nano) reject any non-default value with a 400, and this app
-        // never exposed temperature as a user-configurable setting anyway.
-        let body = serde_json::json!({
+        serde_json::json!({
             "model": expert.config.model_name,
             "messages": messages,
-            "stream": false
-        });
+            "stream": stream
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for OpenAiCompatibleClient {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+        let url = Self::endpoint(expert);
+        let headers = Self::headers(expert)?;
+        let body = Self::body(prompt, attachments, history, expert, false);
 
         let res = self.client.post(&url)
             .headers(headers)
+            .timeout(REQUEST_TIMEOUT)
             .json(&body)
             .send()
             .await
@@ -248,67 +382,9 @@ impl LlmProvider for OpenAiCompatibleClient {
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
-        let default_url = match expert.config.provider_type {
-            ProviderType::Grok => "https://api.x.ai/v1".to_string(),
-            _ => "https://api.openai.com/v1".to_string(),
-        };
-        let base_url = expert.config.base_url.clone().unwrap_or(default_url);
-        let url = format!("{}/chat/completions", base_url);
-        
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-        if let Some(ref key) = expert.config.api_key {
-            headers.insert("Authorization", HeaderValue::from_str(&format!("Bearer {}", key))
-                .map_err(|e| PanelError::ConfigError(e.to_string()))?);
-        }
-
-        let mut messages = vec![
-            serde_json::json!({
-                "role": "system",
-                "content": expert.system_prompt
-            })
-        ];
-
-        for msg in history {
-            messages.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "content": msg.content
-            }));
-        }
-
-        let user_content = if attachments.is_empty() {
-            serde_json::json!(prompt)
-        } else {
-            let mut content_parts = vec![
-                serde_json::json!({
-                    "type": "text",
-                    "text": prompt
-                })
-            ];
-            for att in attachments {
-                if att.mime_type.starts_with("image/") {
-                    content_parts.push(serde_json::json!({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:{};base64,{}", att.mime_type, att.base64_data)
-                        }
-                    }));
-                }
-            }
-            serde_json::json!(content_parts)
-        };
-
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": user_content
-        }));
-
-        // Temperature is intentionally omitted (see the comment in `generate` above).
-        let body = serde_json::json!({
-            "model": expert.config.model_name,
-            "messages": messages,
-            "stream": true
-        });
+        let url = Self::endpoint(expert);
+        let headers = Self::headers(expert)?;
+        let body = Self::body(prompt, attachments, history, expert, true);
 
         let res = self.client.post(&url)
             .headers(headers)
@@ -324,15 +400,15 @@ impl LlmProvider for OpenAiCompatibleClient {
         }
 
         let mut stream = res.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| PanelError::ApiError(e.to_string()))?;
-            let chunk_str = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&chunk_str);
+        'outer: loop {
+            match next_stream_chunk(&mut stream, "OpenAI").await? {
+                StreamStep::Done => break,
+                StreamStep::Chunk(chunk) => buffer.extend_from_slice(&chunk),
+            }
 
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer.drain(..=line_end).collect::<String>();
+            for line in drain_lines(&mut buffer) {
                 let trimmed = line.trim();
 
                 if trimmed.is_empty() {
@@ -340,7 +416,7 @@ impl LlmProvider for OpenAiCompatibleClient {
                 }
 
                 if trimmed == "data: [DONE]" {
-                    break;
+                    break 'outer;
                 }
 
                 if let Some(data_str) = trimmed.strip_prefix("data: ") {
@@ -363,50 +439,54 @@ impl LlmProvider for OpenAiCompatibleClient {
 }
 
 // ── Anthropic Client ──
-#[derive(Default)]
 pub struct AnthropicClient {
     pub client: reqwest::Client,
 }
 
-impl AnthropicClient {
-    pub fn new() -> Self {
-        Self::default()
+impl Default for AnthropicClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-#[async_trait::async_trait]
-impl LlmProvider for AnthropicClient {
-    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
-        let url = "https://api.anthropic.com/v1/messages";
-        
+impl AnthropicClient {
+    pub fn new() -> Self {
+        Self { client: http_client() }
+    }
+
+    fn headers(expert: &Expert) -> Result<HeaderMap, PanelError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/json"));
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
         if let Some(ref key) = expert.config.api_key {
-            headers.insert("x-api-key", HeaderValue::from_str(key)
-                .map_err(|e| PanelError::ConfigError(e.to_string()))?);
+            headers.insert(
+                "x-api-key",
+                HeaderValue::from_str(key).map_err(|e| PanelError::ConfigError(e.to_string()))?,
+            );
         }
+        Ok(headers)
+    }
 
+    // Temperature is intentionally omitted: several newer model aliases (e.g.
+    // claude-opus-4-8, claude-sonnet-5) reject it outright with a 400, this app never
+    // exposed it as a user-configurable setting, and Anthropic disallows it entirely
+    // when extended thinking is enabled.
+    fn body(
+        prompt: &str,
+        attachments: &[Attachment],
+        history: &[Message],
+        expert: &Expert,
+        stream: bool,
+    ) -> serde_json::Value {
         let mut messages = Vec::new();
-        for msg in history {
-            if let Role::System = msg.role {
-                continue;
-            }
-            messages.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "content": msg.content
-            }));
+        for (role, content) in normalize_history(history) {
+            messages.push(serde_json::json!({ "role": role, "content": content }));
         }
 
         let user_content = if attachments.is_empty() {
             serde_json::json!(prompt)
         } else {
-            let mut content_parts = vec![
-                serde_json::json!({
-                    "type": "text",
-                    "text": prompt
-                })
-            ];
+            let mut content_parts = vec![serde_json::json!({ "type": "text", "text": prompt })];
             for att in attachments {
                 if att.mime_type.starts_with("image/") {
                     content_parts.push(serde_json::json!({
@@ -422,24 +502,39 @@ impl LlmProvider for AnthropicClient {
             serde_json::json!(content_parts)
         };
 
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": user_content
-        }));
+        messages.push(serde_json::json!({ "role": "user", "content": user_content }));
 
-        // Temperature is intentionally omitted: several newer model aliases (e.g.
-        // claude-opus-4-8, claude-sonnet-5) reject it outright with a 400, and this app
-        // never exposed temperature as a user-configurable setting anyway.
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": expert.config.model_name,
             "max_tokens": 4096,
             "system": expert.system_prompt,
             "messages": messages,
-            "stream": false
+            "stream": stream
         });
+
+        if expert.config.enable_thinking {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": 4096
+            });
+            // Extended thinking needs room to think plus room to answer.
+            body["max_tokens"] = serde_json::json!(8192);
+        }
+
+        body
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for AnthropicClient {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+        let url = "https://api.anthropic.com/v1/messages";
+        let headers = Self::headers(expert)?;
+        let body = Self::body(prompt, attachments, history, expert, false);
 
         let res = self.client.post(url)
             .headers(headers)
+            .timeout(REQUEST_TIMEOUT)
             .json(&body)
             .send()
             .await
@@ -471,73 +566,8 @@ impl LlmProvider for AnthropicClient {
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
         let url = "https://api.anthropic.com/v1/messages";
-        
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-        if let Some(ref key) = expert.config.api_key {
-            headers.insert("x-api-key", HeaderValue::from_str(key)
-                .map_err(|e| PanelError::ConfigError(e.to_string()))?);
-        }
-
-        let mut messages = Vec::new();
-        for msg in history {
-            if let Role::System = msg.role {
-                continue;
-            }
-            messages.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "content": msg.content
-            }));
-        }
-
-        let user_content = if attachments.is_empty() {
-            serde_json::json!(prompt)
-        } else {
-            let mut content_parts = vec![
-                serde_json::json!({
-                    "type": "text",
-                    "text": prompt
-                })
-            ];
-            for att in attachments {
-                if att.mime_type.starts_with("image/") {
-                    content_parts.push(serde_json::json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": att.mime_type,
-                            "data": att.base64_data
-                        }
-                    }));
-                }
-            }
-            serde_json::json!(content_parts)
-        };
-
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": user_content
-        }));
-
-        // Temperature is intentionally omitted (see the comment in `generate` above); it's
-        // also disallowed by Anthropic when extended thinking is enabled.
-        let mut body = serde_json::json!({
-            "model": expert.config.model_name,
-            "max_tokens": 4096,
-            "system": expert.system_prompt,
-            "messages": messages,
-            "stream": true
-        });
-
-        if expert.config.enable_thinking {
-            body["thinking"] = serde_json::json!({
-                "type": "enabled",
-                "budget_tokens": 4096
-            });
-            // Extended thinking needs room to think plus room to answer.
-            body["max_tokens"] = serde_json::json!(8192);
-        }
+        let headers = Self::headers(expert)?;
+        let body = Self::body(prompt, attachments, history, expert, true);
 
         let res = self.client.post(url)
             .headers(headers)
@@ -553,15 +583,15 @@ impl LlmProvider for AnthropicClient {
         }
 
         let mut stream = res.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| PanelError::ApiError(e.to_string()))?;
-            let chunk_str = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&chunk_str);
+        'outer: loop {
+            match next_stream_chunk(&mut stream, "Anthropic").await? {
+                StreamStep::Done => break,
+                StreamStep::Chunk(chunk) => buffer.extend_from_slice(&chunk),
+            }
 
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer.drain(..=line_end).collect::<String>();
+            for line in drain_lines(&mut buffer) {
                 let trimmed = line.trim();
 
                 if trimmed.is_empty() {
@@ -578,7 +608,7 @@ impl LlmProvider for AnthropicClient {
                                     callback.on_thinking_chunk(thinking);
                                 }
                             } else if event_type == "message_stop" {
-                                break;
+                                break 'outer;
                             }
                         }
                     }
@@ -591,37 +621,51 @@ impl LlmProvider for AnthropicClient {
 }
 
 // ── Google Gemini Client ──
-#[derive(Default)]
 pub struct GeminiClient {
     pub client: reqwest::Client,
 }
 
-impl GeminiClient {
-    pub fn new() -> Self {
-        Self::default()
+impl Default for GeminiClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-#[async_trait::async_trait]
-impl LlmProvider for GeminiClient {
-    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
-        let api_key = expert.config.api_key.clone().unwrap_or_default();
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            expert.config.model_name, api_key
-        );
+impl GeminiClient {
+    pub fn new() -> Self {
+        Self { client: http_client() }
+    }
 
+    // The key goes in a header, never the query string: reqwest embeds the request URL in
+    // its error strings, and those are surfaced verbatim in the UI's error pane — a failed
+    // connection would otherwise put the user's API key on screen (and in any log or
+    // screenshot of it).
+    fn headers(config: &ProviderConfig) -> Result<HeaderMap, PanelError> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+        if let Some(ref key) = config.api_key {
+            headers.insert(
+                "x-goog-api-key",
+                HeaderValue::from_str(key).map_err(|e| PanelError::ConfigError(e.to_string()))?,
+            );
+        }
+        Ok(headers)
+    }
 
+    fn body(
+        prompt: &str,
+        attachments: &[Attachment],
+        history: &[Message],
+        expert: &Expert,
+    ) -> serde_json::Value {
         let mut contents = Vec::new();
-        for msg in history {
-            if let Role::System = msg.role {
-                continue;
-            }
+        for (role, content) in normalize_history(history) {
+            // Gemini names the assistant turn "model"; sending "assistant" is rejected
+            // outright as an invalid argument.
+            let gemini_role = if role == "assistant" { "model" } else { "user" };
             contents.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "parts": [{"text": msg.content}]
+                "role": gemini_role,
+                "parts": [{ "text": content }]
             }));
         }
 
@@ -637,23 +681,40 @@ impl LlmProvider for GeminiClient {
             }
         }
 
-        contents.push(serde_json::json!({
-            "role": "user",
-            "parts": user_parts
-        }));
+        contents.push(serde_json::json!({ "role": "user", "parts": user_parts }));
 
-        let body = serde_json::json!({
+        let mut generation_config = serde_json::json!({
+            "temperature": expert.config.temperature.unwrap_or(0.7)
+        });
+        if expert.config.enable_thinking {
+            generation_config["thinkingConfig"] = serde_json::json!({
+                "includeThoughts": true
+            });
+        }
+
+        serde_json::json!({
             "contents": contents,
             "systemInstruction": {
-                "parts": [{"text": expert.system_prompt}]
+                "parts": [{ "text": expert.system_prompt }]
             },
-            "generationConfig": {
-                "temperature": expert.config.temperature.unwrap_or(0.7)
-            }
-        });
+            "generationConfig": generation_config
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for GeminiClient {
+    async fn generate(&self, prompt: &str, attachments: &[Attachment], history: &[Message], expert: &Expert) -> Result<String, PanelError> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            expert.config.model_name
+        );
+        let headers = Self::headers(&expert.config)?;
+        let body = Self::body(prompt, attachments, history, expert);
 
         let res = self.client.post(&url)
             .headers(headers)
+            .timeout(REQUEST_TIMEOUT)
             .json(&body)
             .send()
             .await
@@ -684,62 +745,15 @@ impl LlmProvider for GeminiClient {
         expert: &Expert,
         callback: &(dyn StreamCallback + 'static),
     ) -> Result<(), PanelError> {
-        let api_key = expert.config.api_key.clone().unwrap_or_default();
         // `alt=sse` switches this endpoint from a single slowly-growing JSON array (which
         // can only be parsed once the entire response has arrived) to one complete JSON
         // object per "data:" line, streamed incrementally like the other providers.
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-            expert.config.model_name, api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse",
+            expert.config.model_name
         );
-
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-
-        let mut contents = Vec::new();
-        for msg in history {
-            if let Role::System = msg.role {
-                continue;
-            }
-            contents.push(serde_json::json!({
-                "role": role_to_string(&msg.role),
-                "parts": [{"text": msg.content}]
-            }));
-        }
-
-        let mut user_parts = vec![serde_json::json!({ "text": prompt })];
-        for att in attachments {
-            if att.mime_type.starts_with("image/") {
-                user_parts.push(serde_json::json!({
-                    "inline_data": {
-                        "mime_type": att.mime_type,
-                        "data": att.base64_data
-                    }
-                }));
-            }
-        }
-
-        contents.push(serde_json::json!({
-            "role": "user",
-            "parts": user_parts
-        }));
-
-        let mut generation_config = serde_json::json!({
-            "temperature": expert.config.temperature.unwrap_or(0.7)
-        });
-        if expert.config.enable_thinking {
-            generation_config["thinkingConfig"] = serde_json::json!({
-                "includeThoughts": true
-            });
-        }
-
-        let body = serde_json::json!({
-            "contents": contents,
-            "systemInstruction": {
-                "parts": [{"text": expert.system_prompt}]
-            },
-            "generationConfig": generation_config
-        });
+        let headers = Self::headers(&expert.config)?;
+        let body = Self::body(prompt, attachments, history, expert);
 
         let res = self.client.post(&url)
             .headers(headers)
@@ -771,15 +785,15 @@ impl LlmProvider for GeminiClient {
         }
 
         let mut stream = res.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| PanelError::ApiError(e.to_string()))?;
-            let chunk_str = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&chunk_str);
+        loop {
+            match next_stream_chunk(&mut stream, "Gemini").await? {
+                StreamStep::Done => break,
+                StreamStep::Chunk(chunk) => buffer.extend_from_slice(&chunk),
+            }
 
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer.drain(..=line_end).collect::<String>();
+            for line in drain_lines(&mut buffer) {
                 let trimmed = line.trim();
 
                 if trimmed.is_empty() {
@@ -825,7 +839,11 @@ impl LlmProvider for MockProvider {
         if expert.config.enable_thinking {
             callback.on_thinking_chunk(&format!("Mock reasoning trace from {}...", expert.name));
         }
-        if prompt.contains("Other panel experts have generated") {
+        // Markers for the two prompts that show an expert its peers' work: the discussion
+        // reaction/closing rounds, and the coding flow's build-failure repair round.
+        let is_reaction = prompt.contains("the other panelists said")
+            || prompt.contains("Other panel experts have generated");
+        if is_reaction {
             callback.on_chunk(&format!("Mock critique and revised draft from {}", expert.name));
         } else {
             callback.on_chunk(&format!("Mock initial draft from {}", expert.name));
@@ -848,7 +866,7 @@ pub fn get_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
 
 // ── Model Discovery ──
 pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelError> {
-    let client = reqwest::Client::new();
+    let client = http_client();
 
     match config.provider_type {
         ProviderType::Mock => Ok(vec!["mock-model".to_string()]),
@@ -864,6 +882,7 @@ pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelEr
 
             let res = client.get("https://api.anthropic.com/v1/models?limit=1000")
                 .headers(headers)
+                .timeout(REQUEST_TIMEOUT)
                 .send()
                 .await
                 .map_err(|e| PanelError::ApiError(e.to_string()))?;
@@ -885,11 +904,15 @@ pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelEr
         }
 
         ProviderType::Gemini => {
-            let api_key = config.api_key.clone()
-                .ok_or_else(|| PanelError::ConfigError("Missing API key".to_string()))?;
+            if config.api_key.is_none() {
+                return Err(PanelError::ConfigError("Missing API key".to_string()));
+            }
 
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models?key={}&pageSize=1000", api_key);
-            let res = client.get(&url)
+            // Key in a header, not the query string — see GeminiClient::headers.
+            let url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
+            let res = client.get(url)
+                .headers(GeminiClient::headers(config)?)
+                .timeout(REQUEST_TIMEOUT)
                 .send()
                 .await
                 .map_err(|e| PanelError::ApiError(e.to_string()))?;
@@ -929,6 +952,7 @@ pub async fn list_models(config: &ProviderConfig) -> Result<Vec<String>, PanelEr
 
             let res = client.get(&url)
                 .headers(headers)
+                .timeout(REQUEST_TIMEOUT)
                 .send()
                 .await
                 .map_err(|e| PanelError::ApiError(e.to_string()))?;
@@ -1080,6 +1104,8 @@ pub async fn run_council_flow(
     council: &Council,
     callback: Arc<dyn CouncilCallback + 'static>,
 ) -> Result<String, PanelError> {
+    clear_cancel();
+
     let total_rounds = council.rounds.max(2);
     let max_words = if council.max_response_words == 0 { 300 } else { council.max_response_words };
 
@@ -1102,9 +1128,21 @@ pub async fn run_council_flow(
         opening_prompt_for,
     ).await;
 
+    // An opening round where every expert failed leaves nothing to react to; continuing
+    // would spend the remaining rounds asking each model to rebut an empty transcript.
+    if previous_round.is_empty() {
+        return Err(PanelError::ApiError(
+            "No expert produced an opening statement — check provider credentials and model names.".to_string(),
+        ));
+    }
+
     // Rounds 2..total_rounds: each expert reads the immediately preceding round's statements
     // and reacts (rebuttal, agreement, refinement); the last round is a closing statement.
     for round_number in 2..=total_rounds {
+        if is_cancelled() {
+            break;
+        }
+
         let is_final = round_number == total_rounds;
         let prev = previous_round.clone();
 
@@ -1115,15 +1153,23 @@ pub async fn run_council_flow(
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
+            // An expert is asked to refine "your position", so it needs to be shown what
+            // that position actually was — the per-round prompt is the only place it
+            // appears, since each round is a fresh single-turn request.
+            let own_previous = prev.iter()
+                .find(|(id, _)| id == &expert.id)
+                .map(|(_, text)| format!("Your own statement in the previous round:\n{}\n\n", text))
+                .unwrap_or_default();
+
             if is_final {
                 format!(
-                    "{}\n\nThis is the FINAL round ({} of {}) of the panel discussion. Give your CLOSING STATEMENT. Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nWrap up your position now — this is the last thing you'll say.",
-                    style_instruction, round_number, total_rounds, others_str, prompt
+                    "{}\n\nThis is the FINAL round ({} of {}) of the panel discussion. Give your CLOSING STATEMENT.\n\n{}Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nWrap up your position now — this is the last thing you'll say.",
+                    style_instruction, round_number, total_rounds, own_previous, others_str, prompt
                 )
             } else {
                 format!(
-                    "{}\n\nThis is round {} of {} of the panel discussion. Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nRespond with a rebuttal, agreement, or refinement of your position based on what you just read.",
-                    style_instruction, round_number, total_rounds, others_str, prompt
+                    "{}\n\nThis is round {} of {} of the panel discussion.\n\n{}Here is what the other panelists said in the previous round:\n\n{}\n\nUser query: \"{}\"\n\nRespond with a rebuttal, agreement, or refinement of your position based on what you just read.",
+                    style_instruction, round_number, total_rounds, own_previous, others_str, prompt
                 )
             }
         };
@@ -1134,6 +1180,8 @@ pub async fn run_council_flow(
             prompt_for,
         ).await;
 
+        // A round where everyone failed (rate limit, dropped network) keeps the previous
+        // round as the live transcript rather than erasing the discussion so far.
         if !round_results.is_empty() {
             previous_round = round_results;
         }
@@ -1179,6 +1227,86 @@ pub fn parse_file_edits(text: &str) -> Vec<FileEdit> {
     edits
 }
 
+// Resolves a model-proposed path against the workspace, refusing anything that escapes it.
+//
+// Model output is untrusted input here, and doubly so in this app: workspace file contents
+// are pasted into the prompt, so text inside a file being reviewed can steer what the model
+// emits. `Path::join` offers no protection — it walks `..` happily, and joining an absolute
+// path discards the workspace root entirely — so a single crafted `<write_file>` could
+// otherwise land in a shell profile and run as the user.
+pub fn resolve_workspace_path(workspace_path: &str, relative: &str) -> Option<PathBuf> {
+    let root = std::fs::canonicalize(workspace_path).ok()?;
+    let candidate = Path::new(relative);
+
+    if candidate.is_absolute() {
+        return None;
+    }
+
+    let mut resolved = root.clone();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir => {}
+            // ParentDir/RootDir/Prefix are the escape routes; there's no legitimate reason
+            // for a workspace-relative edit to use one.
+            _ => return None,
+        }
+    }
+
+    // Building from Normal components alone keeps the path lexically inside the root, but a
+    // symlink in the middle of it can still point somewhere else. Check the deepest part of
+    // the path that exists on disk (the file itself may be about to be created).
+    let mut probe = resolved.as_path();
+    loop {
+        if probe.exists() {
+            let real = std::fs::canonicalize(probe).ok()?;
+            if !real.starts_with(&root) {
+                return None;
+            }
+            break;
+        }
+        probe = probe.parent()?;
+    }
+
+    Some(resolved)
+}
+
+// Writes one expert's proposed edits into the workspace, skipping any that fail the
+// containment check. Returns the paths actually written.
+fn apply_file_edits(
+    workspace_path: &str,
+    edits: &[FileEdit],
+    callback: &Arc<dyn CodingCallback + 'static>,
+) -> Vec<String> {
+    let mut written = Vec::new();
+
+    for edit in edits {
+        let Some(full_file_path) = resolve_workspace_path(workspace_path, &edit.path) else {
+            callback.on_workspace_warning(&format!(
+                "Refused to write '{}': path resolves outside the workspace directory.",
+                edit.path
+            ));
+            continue;
+        };
+
+        if let Some(parent) = full_file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match std::fs::write(&full_file_path, &edit.content) {
+            Ok(_) => {
+                callback.on_file_write(&edit.path);
+                written.push(edit.path.clone());
+            }
+            Err(e) => {
+                callback.on_workspace_warning(&format!("Failed to write '{}': {}", edit.path, e));
+            }
+        }
+    }
+
+    written
+}
+
 pub fn run_build_command(workspace_path: &str, command_str: &str) -> (bool, String) {
     let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
     let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
@@ -1203,6 +1331,33 @@ pub fn run_build_command(workspace_path: &str, command_str: &str) -> (bool, Stri
     }
 }
 
+// Applies every expert's proposed edits for one round, in expert order.
+//
+// NOTE: experts share a single workspace, so when two of them write the same path the last
+// one wins and the build then verifies that blend rather than either expert's coherent
+// proposal. That is a known limitation of this first-pass flow — see Milestone 8 in
+// notes/architecture-and-roadmap.md, which calls for isolated per-expert workspaces and an
+// explicit selection step. Until then, collisions are at least reported rather than silent.
+fn apply_round_edits(
+    workspace_path: &str,
+    drafts: &[(String, String)],
+    callback: &Arc<dyn CodingCallback + 'static>,
+) {
+    let mut authors: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for (expert_id, draft) in drafts {
+        let edits = parse_file_edits(draft);
+        for path in apply_file_edits(workspace_path, &edits, callback) {
+            if let Some(previous) = authors.insert(path.clone(), expert_id.clone()) {
+                callback.on_workspace_warning(&format!(
+                    "'{}' was written by [{}] and then overwritten by [{}]; only the later version was built.",
+                    path, previous, expert_id
+                ));
+            }
+        }
+    }
+}
+
 pub trait CodingCallback: Send + Sync {
     fn on_expert_started(&self, expert_id: &str);
     fn on_expert_chunk(&self, expert_id: &str, chunk: &str);
@@ -1210,6 +1365,9 @@ pub trait CodingCallback: Send + Sync {
     fn on_expert_error(&self, expert_id: &str, error: &str);
 
     fn on_file_write(&self, path: &str);
+    // A proposed edit that was refused or failed, and why — surfaced so a rejected write
+    // isn't silently invisible to the user.
+    fn on_workspace_warning(&self, message: &str);
     fn on_build_started(&self, command: &str);
     fn on_build_completed(&self, success: bool, output: &str);
 }
@@ -1223,6 +1381,8 @@ pub async fn run_agent_coding_flow(
     council: &Council,
     callback: Arc<dyn CodingCallback + 'static>,
 ) -> Result<String, PanelError> {
+    clear_cancel();
+
     let mut draft_handles = Vec::new();
     let system_instructions = "\n\nIMPORTANT: You are in Coding Agent Mode. You have read access to the local workspace files. If you propose creating or modifying files, you MUST write them out fully using the following XML format:\n<write_file path=\"relative/path/to/file\">\n// file contents here\n</write_file>\nMake sure to write valid code that will compile.";
     
@@ -1299,18 +1459,14 @@ pub async fn run_agent_coding_flow(
         }
     }
 
-    for (_expert_id, draft) in &expert_drafts {
-        let edits = parse_file_edits(draft);
-        for edit in edits {
-            let full_file_path = std::path::Path::new(workspace_path).join(&edit.path);
-            if let Some(parent) = full_file_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if std::fs::write(&full_file_path, &edit.content).is_ok() {
-                callback.on_file_write(&edit.path);
-            }
-        }
+    // Cancelling means the drafts are half-finished, so writing them to the workspace and
+    // building would be worse than doing nothing.
+    if is_cancelled() {
+        callback.on_workspace_warning("Cancelled before applying edits — the workspace was not modified.");
+        return Ok("Cancelled before any file was written.".to_string());
     }
+
+    apply_round_edits(workspace_path, &expert_drafts, &callback);
 
     let mut build_success = true;
     let mut build_log = String::new();
@@ -1324,7 +1480,7 @@ pub async fn run_agent_coding_flow(
 
     let mut final_expert_drafts = expert_drafts.clone();
     
-    if !build_success && council.critique_rounds > 0 {
+    if !build_success && council.critique_rounds > 0 && !is_cancelled() {
         let mut critique_handles = Vec::new();
         
         for expert in &council.experts {
@@ -1413,22 +1569,11 @@ pub async fn run_agent_coding_flow(
             }
         }
         
-        if !revised_drafts.is_empty() {
+        if !revised_drafts.is_empty() && !is_cancelled() {
             final_expert_drafts = revised_drafts;
-            
-            for (_expert_id, draft) in &final_expert_drafts {
-                let edits = parse_file_edits(draft);
-                for edit in edits {
-                    let full_file_path = std::path::Path::new(workspace_path).join(&edit.path);
-                    if let Some(parent) = full_file_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if std::fs::write(&full_file_path, &edit.content).is_ok() {
-                        callback.on_file_write(&edit.path);
-                    }
-                }
-            }
-            
+
+            apply_round_edits(workspace_path, &final_expert_drafts, &callback);
+
             if !build_command.trim().is_empty() && !workspace_path.trim().is_empty() {
                 callback.on_build_started(build_command);
                 let (success, log) = run_build_command(workspace_path, build_command);
@@ -1558,6 +1703,106 @@ mod tests {
         assert!(started_crit.contains(&"expert-2".to_string()));
     }
 
+    // A second turn is where the history bugs lived: the council appends one message per
+    // expert per round, so turn two replays a run of same-role messages that Anthropic
+    // rejects and Gemini can't name. This drives that shape through the whole flow.
+    #[tokio::test]
+    async fn test_run_council_flow_with_prior_turn_history() {
+        let mock_config = ProviderConfig {
+            name: "Mock Provider".to_string(),
+            provider_type: ProviderType::Mock,
+            model_name: "mock-model".to_string(),
+            base_url: None,
+            api_key: None,
+            temperature: None,
+            enable_thinking: false,
+        };
+
+        let council = Council {
+            id: "test-council".to_string(),
+            name: "Test Council".to_string(),
+            experts: vec![
+                Expert {
+                    id: "expert-1".to_string(),
+                    name: "Expert 1".to_string(),
+                    config: mock_config.clone(),
+                    system_prompt: "you are expert 1".to_string(),
+                },
+                Expert {
+                    id: "expert-2".to_string(),
+                    name: "Expert 2".to_string(),
+                    config: mock_config.clone(),
+                    system_prompt: "you are expert 2".to_string(),
+                },
+            ],
+            critique_rounds: 0,
+            rounds: 3,
+            max_response_words: 300,
+        };
+
+        let history = vec![
+            msg(Role::User, "first turn question"),
+            msg(Role::ExpertDraft { expert_id: "expert-1".to_string() }, "opening one"),
+            msg(Role::ExpertDraft { expert_id: "expert-2".to_string() }, "opening two"),
+            msg(Role::ExpertCritique { expert_id: "expert-1".to_string() }, "closing one"),
+            msg(Role::ExpertCritique { expert_id: "expert-2".to_string() }, "closing two"),
+        ];
+
+        let normalized = normalize_history(&history);
+        assert_eq!(normalized.len(), 2, "four expert turns collapse onto one user turn");
+        assert!(normalized[1].1.contains("[expert-1]: opening one"));
+        assert!(normalized[1].1.contains("[expert-2]: closing two"));
+
+        let callback = Arc::new(MockCouncilCallback {
+            started_experts: Arc::new(Mutex::new(Vec::new())),
+            completed_experts: Arc::new(Mutex::new(Vec::new())),
+            started_critiques: Arc::new(Mutex::new(Vec::new())),
+            completed_critiques: Arc::new(Mutex::new(Vec::new())),
+            chunks: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let result = run_council_flow("second turn question", &[], &history, &council, callback.clone()).await;
+        assert!(result.is_ok());
+
+        // Two experts across the opening round, then two more rounds of reactions.
+        assert_eq!(callback.completed_experts.lock().unwrap().len(), 2);
+        assert_eq!(callback.completed_critiques.lock().unwrap().len(), 4);
+
+        // Rounds 2+ must be recognised as reaction rounds, not repeated openings.
+        let chunks = callback.chunks.lock().unwrap();
+        assert_eq!(
+            chunks.iter().filter(|c| c.contains("critique and revised draft")).count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_council_flow_errors_when_no_expert_responds() {
+        // A council with no experts stands in for "every expert failed": the opening round
+        // yields nothing, so there is no transcript for later rounds to react to.
+        let council = Council {
+            id: "empty".to_string(),
+            name: "Empty Council".to_string(),
+            experts: vec![],
+            critique_rounds: 0,
+            rounds: 3,
+            max_response_words: 300,
+        };
+
+        let callback = Arc::new(MockCouncilCallback {
+            started_experts: Arc::new(Mutex::new(Vec::new())),
+            completed_experts: Arc::new(Mutex::new(Vec::new())),
+            started_critiques: Arc::new(Mutex::new(Vec::new())),
+            completed_critiques: Arc::new(Mutex::new(Vec::new())),
+            chunks: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let result = run_council_flow("hello", &[], &[], &council, callback.clone()).await;
+
+        assert!(result.is_err(), "a silent success would bill the user for an empty discussion");
+        assert!(callback.started_critiques.lock().unwrap().is_empty(), "later rounds must not run");
+    }
+
     #[test]
     fn test_parse_file_edits() {
         let sample_text = "Some intro text.\n<write_file path=\"src/foo.rs\">\nfn foo() {}\n</write_file>\nOther text.\n<write_file path=\"tests/bar.rs\">\n#[test]\nfn bar() {}\n</write_file>\nTrailing text.";
@@ -1567,5 +1812,129 @@ mod tests {
         assert_eq!(edits[0].content, "\nfn foo() {}\n");
         assert_eq!(edits[1].path, "tests/bar.rs");
         assert_eq!(edits[1].content, "\n#[test]\nfn bar() {}\n");
+    }
+
+    #[test]
+    fn test_parse_file_edits_ignores_unclosed_tag() {
+        let text = "<write_file path=\"src/ok.rs\">\ndone\n</write_file>\n<write_file path=\"src/truncated.rs\">\nfn incomplete(";
+        let edits = parse_file_edits(text);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].path, "src/ok.rs");
+    }
+
+    fn msg(role: Role, content: &str) -> Message {
+        Message {
+            id: "id".to_string(),
+            role,
+            content: content.to_string(),
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn test_normalize_history_merges_consecutive_expert_turns() {
+        let history = vec![
+            msg(Role::User, "what is the best database?"),
+            msg(Role::ExpertDraft { expert_id: "expert-1".to_string() }, "Postgres."),
+            msg(Role::ExpertDraft { expert_id: "expert-2".to_string() }, "SQLite."),
+            msg(Role::User, "why?"),
+        ];
+
+        let normalized = normalize_history(&history);
+
+        // The two expert turns collapse into one assistant turn so roles alternate, and
+        // each keeps its author label.
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[0].0, "user");
+        assert_eq!(normalized[1].0, "assistant");
+        assert_eq!(normalized[1].1, "[expert-1]: Postgres.\n\n[expert-2]: SQLite.");
+        assert_eq!(normalized[2].0, "user");
+
+        for pair in normalized.windows(2) {
+            assert_ne!(pair[0].0, pair[1].0, "roles must alternate");
+        }
+    }
+
+    #[test]
+    fn test_normalize_history_drops_system_and_leading_assistant() {
+        let history = vec![
+            msg(Role::System, "ignore me"),
+            msg(Role::Assistant, "stray leading assistant turn"),
+            msg(Role::User, "hello"),
+        ];
+
+        let normalized = normalize_history(&history);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].0, "user");
+        assert_eq!(normalized[0].1, "hello");
+    }
+
+    #[test]
+    fn test_drain_lines_preserves_utf8_split_across_chunks() {
+        let mut buffer: Vec<u8> = Vec::new();
+        let text = "data: 日本語\n";
+        let bytes = text.as_bytes();
+
+        // Split mid-character: the second byte of a three-byte code point.
+        let split = 7;
+        buffer.extend_from_slice(&bytes[..split]);
+        assert!(drain_lines(&mut buffer).is_empty(), "partial line must stay buffered");
+
+        buffer.extend_from_slice(&bytes[split..]);
+        let lines = drain_lines(&mut buffer);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].trim(), "data: 日本語");
+        assert!(!lines[0].contains('\u{FFFD}'), "no replacement characters");
+    }
+
+    #[test]
+    fn test_drain_lines_keeps_trailing_partial() {
+        let mut buffer: Vec<u8> = Vec::new();
+        buffer.extend_from_slice(b"first\nsecond\nthir");
+
+        let lines = drain_lines(&mut buffer);
+
+        assert_eq!(lines, vec!["first\n".to_string(), "second\n".to_string()]);
+        assert_eq!(buffer, b"thir");
+    }
+
+    #[test]
+    fn test_resolve_workspace_path_rejects_escapes() {
+        let root = std::env::temp_dir().join(format!("coe-path-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let root_str = root.to_str().unwrap();
+
+        // Ordinary relative paths resolve inside the workspace, including new files.
+        let ok = resolve_workspace_path(root_str, "src/new_file.rs").unwrap();
+        assert!(ok.starts_with(std::fs::canonicalize(&root).unwrap()));
+        assert!(resolve_workspace_path(root_str, "./src/other.rs").is_some());
+
+        // Traversal and absolute paths are refused.
+        assert!(resolve_workspace_path(root_str, "../escaped.rs").is_none());
+        assert!(resolve_workspace_path(root_str, "src/../../escaped.rs").is_none());
+        assert!(resolve_workspace_path(root_str, "/etc/passwd").is_none());
+        assert!(resolve_workspace_path(root_str, "/Users/someone/.zshenv").is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_resolve_workspace_path_rejects_symlink_escape() {
+        let base = std::env::temp_dir().join(format!("coe-symlink-test-{}", std::process::id()));
+        let root = base.join("workspace");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+            let resolved = resolve_workspace_path(root.to_str().unwrap(), "escape/evil.rs");
+            assert!(resolved.is_none(), "a symlink pointing outside the workspace must be refused");
+        }
+
+        std::fs::remove_dir_all(&base).ok();
     }
 }
