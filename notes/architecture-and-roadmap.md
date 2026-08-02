@@ -110,24 +110,51 @@ While we draw inspiration from state-of-the-art agentic tools—such as **Antigr
 *   [x] Wire UI to Rust Core streams and integrate critique segmented views.
 *   [x] Move credentials to native macOS Settings panel.
 
-### Milestone 5: Multi-Turn Conversation Logs & Session Persistence [SUGGESTED]
-*   [ ] Implement multi-turn conversational history logging.
-*   [ ] Add local session serialization and database persistence.
+### Milestone 5: Multi-Turn Conversation Logs & Session Persistence [COMPLETED]
+*   [x] Implement multi-turn conversational history logging.
+*   [x] Add local session serialization and database persistence.
+*   [x] **Correctness pass (2026-08-01)** — the first implementation sent every expert's output to every other expert as an unlabeled `assistant` turn, which Gemini rejected outright (invalid role), Anthropic rejected as non-alternating, and which told each model it had authored its rivals' statements. History is now normalized once in the core: authored, merged, and trimmed to start at a user turn.
 
-### Milestone 6: Multimodal Inputs & Media Integration [SUGGESTED]
-*   [ ] Add support for image and multimodal inputs in the council flow.
+### Milestone 6: Multimodal Inputs & Media Integration [COMPLETED]
+*   [x] Add support for image and multimodal inputs in the council flow.
 
-### Milestone 7: Local Directory Integration [SUGGESTED]
-*   [ ] Expose path configuration in the app settings or sidebar to set a local directory.
-*   [ ] Scan, index, and load files inside the target directory.
-*   [ ] Allow experts to read specific files and form collaborative discussion groups around code segments.
+### Milestone 7: Local Directory Integration [COMPLETED]
+*   [x] Expose path configuration in the app settings or sidebar to set a local directory.
+*   [x] Scan, index, and load files inside the target directory.
+*   [x] Allow experts to read specific files and form collaborative discussion groups around code segments.
 
-### Milestone 8: Multi-Source Agentic Coding Platform [SUGGESTED]
-*   [ ] Evolve the council system into an agentic coding platform that utilizes multiple AI sources/models simultaneously.
+### Milestone 8: Multi-Source Agentic Coding Platform [FIRST PASS — REDESIGN REQUIRED]
+*   [x] Evolve the council system into an agentic coding platform that utilizes multiple AI sources/models simultaneously.
+*   [x] Sandbox safety: workspace-relative path containment for model-proposed file writes (2026-08-01). Traversal, absolute paths, and symlink escapes are refused and reported.
+*   [ ] **Decide the consensus mechanic before building further.** The first pass has every expert write complete files into one shared workspace, applied in expert order — so the last writer silently wins on any shared path and the build verifies that blend rather than any single expert's coherent proposal. That is the opposite of the Tandem Isolation and diverse-consensus philosophy above. Collisions are currently reported but not resolved. Candidate designs:
+    *   **Champion selection** — each expert proposes a full patch set, each is applied to an isolated copy (or git worktree) and built/tested independently, and the passing or panel-selected candidate is applied to the real workspace.
+    *   **Partitioned tandem work** — an explicit up-front split of files or modules per expert, so concurrent writes cannot collide.
 *   [ ] Allow different agents (potentially from different vendors, e.g., Claude for refactoring, Gemini for code analysis, ChatGPT for test writing) to work in tandem across separate files or code boundaries simultaneously.
 
-### Milestone 9: Revisit Chairman/Synthesis Role [SUGGESTED — deferred]
-*   [ ] Reconsider a synthesis/"Chairman" step once all provider integrations are solid (temperature handling, streaming parsers, thinking-mode interactions) and the multi-round discussion format has proven itself in real use.
-*   [ ] If reintroduced, evaluate whether it should stay a single dedicated model/persona (as Gaston was) or become an on-demand summarization action the user triggers manually, rather than an implicit step every discussion runs through.
+### Milestone 9: Reinstate the Chairman/Synthesis Role [ACTIVE — removal was likely premature]
+
+The Chairman was removed on 2026-07-14 because synthesis sat on top of provider integrations that were actively broken, not because the idea failed on its merits. That distinction got lost in the removal, and on reflection the concept still holds: a discussion that ends with N closing statements makes the reader do the reconciliation the council exists to perform.
+
+Three things have changed since the removal:
+
+*   **The stated precondition has largely been met.** The bugs that made synthesis untrustworthy are fixed — `temperature` rejection on reasoning-tier models and Gemini's streaming parser (2026-07-14), then Gemini's invalid history role, Anthropic's non-alternating roles, and UTF-8 corruption at SSE chunk boundaries (2026-08-01). The inputs a Chairman would read are now sound in a way they were not when it was cut.
+*   **Independent convergence on the design.** A separately developed commercial product in this space (gather → anonymous peer review → chairman synthesis) treats the synthesis step as its central value claim rather than an optional extra. That is not proof it's correct, but it is evidence the step earns its keep for a general audience, arrived at by someone who had no visibility into this project's reasoning.
+*   **Audience clarity.** This project's user is a technologist who cloned the repo to watch models disagree, and who plausibly wants the raw cards more than a verdict. That argues for synthesis being available rather than mandatory.
+
+Design direction:
+
+*   [ ] Reinstate synthesis as an **on-demand action** — a "Synthesize" control the user triggers after a discussion completes — rather than the implicit final step every discussion ran through before. This keeps the panel transcript primary for the technologist audience while making one reconciled answer one click away.
+*   [ ] Decide whether the synthesizer is a dedicated configured model/persona (as Gaston was) or simply reuses a chosen panelist's provider config.
+*   [ ] Consider borrowing **anonymized peer review** before synthesis: presenting each expert's statements under neutral labels rather than named panelists, so the synthesizer weighs arguments rather than model reputation. The current reaction rounds already label panelists by ID; anonymity would be a small prompt-construction change with a plausible bias benefit.
+*   [ ] Attach a confidence signal to the synthesized answer (degree of panel agreement), which is more honest than a bare verdict and is the natural payoff of having run a debate at all.
+*   [ ] Validate against Milestone 10 rather than by feel: does a synthesized answer actually beat the best individual closing statement?
+
+### Milestone 10: Evaluation Harness [SUGGESTED]
+
+The project's central premise — that a heterogeneous panel debating over several rounds beats a single strong model — is currently unmeasured, and it drives nearly every open design question. The multi-agent-debate literature reports real gains but also documents convergence and sycophancy, with returns flattening or inverting past roughly two to three rounds.
+
+*   [ ] Run a fixed question set through three configurations: a single model, the council at 2 rounds, and the council at 4 rounds.
+*   [ ] Score factual accuracy and answer quality, and check whether panelists converge over rounds (measure how much positions actually change after round 2).
+*   [ ] Use the result to set the default round count, decide Milestone 9, and confirm the premise holds at all.
 
 

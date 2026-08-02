@@ -11,7 +11,7 @@ It's a native macOS app (SwiftUI) backed by a Rust core, with support for Anthro
 ## 🏛️ The Cast & Crew
 
 ### 1. Crates (Rust Core)
-*   [**`core`**](crates/core): The orchestration engine. Async provider clients, SSE token-streaming, the multi-round panel discussion flow (`run_council_flow`), and a first-pass sandboxed agentic coding flow (`run_agent_coding_flow`) that applies file edits, runs a build command, and triggers critique-repair loops on failure.
+*   [**`core`**](crates/core): The orchestration engine. Async provider clients, SSE token-streaming, the multi-round panel discussion flow (`run_council_flow`), and a first-pass agentic coding flow (`run_agent_coding_flow`) that applies workspace-contained file edits, runs a build command, and triggers critique-repair loops on failure. The coding flow is an experiment, not a finished feature — every expert writes into one shared workspace, so overwrites between experts are reported but not yet resolved.
 *   [**`ffi`**](crates/ffi): UniFFI bindings exposing the core's async streaming callbacks to Swift.
 
 ### 2. Platforms
@@ -26,7 +26,8 @@ It's a native macOS app (SwiftUI) backed by a Rust core, with support for Anthro
 *   **Workspace context**: Select a local folder; indexed files can be attached to prompts.
 *   **Multimodal input**: Image attachments across Anthropic, Gemini, and OpenAI providers.
 *   **Session persistence**: Conversations are saved locally and reloaded with full history on relaunch.
-*   **Native Settings panel**: API credentials are stored in `UserDefaults` via a proper macOS Preferences window, not sidebar text fields.
+*   **Native Settings panel**: API credentials are entered through a proper macOS Preferences window and stored in the login Keychain.
+*   **Stop control**: Cancel an in-flight discussion between rounds instead of waiting out the remaining ones.
 
 ---
 

@@ -2,7 +2,70 @@
 
 This document tracks technical changes, refactoring milestones, and build-system adjustments for Project Council-of-Experts.
 
-> **Maintenance:** This changelog is append-only within a release cycle — keep it current every session. It lives at `Notes/Council-of-Experts/CHANGELOG.md`.
+> **Maintenance:** This changelog is append-only within a release cycle — keep it current every session. It lives at `notes/CHANGELOG.md`.
+
+---
+
+## [2026-08-01]
+
+_All code changes in this entry: `46b179a`._
+
+### Fixed
+- **Multi-turn history is now valid for every provider** (`normalize_history` in `crates/core`): expert turns are labeled with their author, consecutive same-role turns are merged, and the transcript is trimmed to start at the first user turn.
+  * Gemini received the literal role `"assistant"` for every history entry, which that API rejects — it only accepts `user` and `model`. Any second-turn conversation with a Gemini expert failed.
+  * Anthropic receives one message per expert per round, producing runs of consecutive `assistant` turns that the Messages API rejects.
+  * Every expert's output was replayed to every other expert as its *own* prior turn, so each model was told it had personally written its rivals' statements.
+- **Agent coding mode could write outside the workspace** (`resolve_workspace_path`): `<write_file>` paths from model output were joined onto the workspace with no containment check, so `../` traversal or an absolute path could write anywhere the user can — reachable via prompt injection from a workspace file being reviewed. Traversal, absolute paths, and symlink escapes are now refused and reported.
+- **SSE streams no longer corrupt non-ASCII output**: all three parsers decoded each network chunk independently, turning any multi-byte UTF-8 character split across a chunk boundary into replacement characters. Line buffering is now byte-based.
+- **Gemini API key moved from the query string to the `x-goog-api-key` header**: reqwest embeds the request URL in its error strings, which are surfaced verbatim in the UI, so a failed request could display the user's key on screen.
+- **`generate_expert_response` / `generate_expert_stream` now run on the shared Tokio runtime**, matching `list_available_models`; they previously called reqwest on whatever thread UniFFI polled them from, with no reactor guaranteed.
+- **A council whose opening round produced nothing now errors** instead of spending the remaining rounds asking each model to react to an empty transcript.
+- **Mock provider recognises reaction rounds again**: its marker string still matched only the old pre-2026-07-14 critique prompt, so sandbox runs returned opening-statement text for every round.
+- **`activeExpertCount` and `councilRounds` are clamped on load and on write**: an out-of-range value restored from a stale defaults plist indexed past the end of the expert config array.
+
+### Added
+- **Stop button** (`cancel_active_run` over FFI): cancels an in-flight run between rounds and between stream chunks, so a runaway discussion stops costing tokens without waiting out the remaining rounds.
+- **Request timeouts**: 20s connect, 300s total for non-streaming calls, and a 120s idle-gap timeout for streams (a total timeout can't distinguish a healthy long answer from a stalled connection).
+- **Each expert now sees its own previous statement** in reaction and closing rounds. Rounds are independent single-turn requests, so an expert asked to "refine your position" previously had no record of what that position was.
+- **Overwrite collisions in agent coding mode are reported** through a new `on_workspace_warning` callback. The underlying last-writer-wins behaviour is unchanged and remains a known limitation — see Milestone 8.
+- **Test coverage** for the above: history normalization, UTF-8 chunk splitting, workspace path traversal and symlink escapes, unclosed `<write_file>` tags, a full multi-turn council run, and the empty-round failure path (13 tests, up from 4).
+
+### Changed
+- **API keys moved from `UserDefaults` to the login Keychain** (`Credentials.swift`), with one-time migration of existing keys and removal of the plaintext copies. A `UserDefaults` plist is readable by any process running as the user.
+- **Workspace scanner skips build and dependency directories** (`.git`, `target`, `node_modules`, `.build`, `DerivedData`, and similar) and inlines at most 256 KB per attached file; selected files are sorted for prompt-cache stability.
+- **Provider request building was extracted into per-client `headers`/`body` helpers**, removing the duplication between each client's `generate` and `generate_stream` — the history fix needed to land in one place per provider rather than six.
+- **Version badge reads `CFBundleShortVersionString`** instead of a hardcoded string that had drifted from every other version in the repo.
+- Default model fallbacks refreshed to `claude-sonnet-5` and `gemini-2.5-pro`.
+
+---
+
+## [2026-07-22]
+
+### Added
+- **AGENTS.md added** (`e2ec34f`): entry-point document defining the stack matrix, file naming conventions, commit hygiene, changelog maintenance rules, and code review execution standards.
+- **Notes restructured** (`bfa8612`): moved engineering notes into the repo's own `notes/` directory.
+
+---
+
+## [2026-07-14]
+
+### Added
+- **Multi-round panel discussions with a response-length cap** (`912ba39`): replaced the single opening+critique pass with a configurable N-round discussion — round 1 is an opening statement made in isolation, the final round is a closing statement, and everything between is a reaction round where each expert reads the others' previous round. 2–10 rounds, default 3. Added a `max_response_words` setting applied as a prompt instruction each round.
+- **Provider model discovery** (`7ee6457`): `list_models` queries Anthropic, Gemini, and OpenAI-compatible endpoints for their available models and offers them as a dropdown beside the model name field.
+- **Optional thinking/reasoning notes** (`7bce907`): added `enable_thinking` to the provider config, wired Anthropic extended thinking and Gemini thought summaries through a separate `on_thinking_chunk` callback path, and displayed them in a collapsed-by-default pane on each expert card.
+- **Round-robin expert messages in the main chat, plus clear-chat reset** (`672245a`).
+- **Resizable drafting grid and toggleable sidebar** (`0481f59`).
+
+### Fixed
+- **Live-use bugs found in real testing** (`804afa7`):
+  * Anthropic and OpenAI reasoning-tier models rejected any non-default `temperature` with a 400 — temperature is no longer sent to either.
+  * Gemini's streaming parser silently dropped all output; switched the endpoint to `alt=sse` so it emits one complete JSON object per `data:` line instead of a single slowly-growing JSON array.
+
+### Removed
+- **Chairman / "Gaston" synthesis step removed entirely** (`804afa7`): real-world testing found it wasn't earning its keep while the individual provider integrations still had live bugs that made synthesis on top of unreliable inputs unreliable itself. The council is now a flat list of up to 8 expert cards with no synthesizer. Deferred rather than abandoned — see Milestone 9 in [architecture-and-roadmap.md](architecture-and-roadmap.md).
+
+### Changed
+- **Build outputs consolidated under `build/`** (`5c81e86`): frameworks and the app bundle now share one output root inside the sub-project.
 
 ---
 

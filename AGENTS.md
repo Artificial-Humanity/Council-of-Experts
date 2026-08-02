@@ -13,7 +13,7 @@ immediate must-do items.
 * **Language Ecosystem:** Rust core (Cargo workspace: `crates/core`, `crates/ffi`) bridged over **UniFFI** to native front-ends.
 * **Front-End:** Native macOS SwiftUI app (`platforms/apple` SwiftPM package, `CouncilOfExpertsApp`), packaged into a double-clickable `.app` bundle via `build_app.sh` / `build_frameworks.sh`.
 * **Providers:** Config-based multi-vendor clients — Anthropic, Gemini, and OpenAI-compatible (ChatGPT, Grok/xAI, and LAN-hosted Ollama/LM Studio via custom `base_url`) — with SSE token streaming; Mock provider for sandboxed testing.
-* **Orchestration:** Lazy multi-threaded Tokio runtime running parallel expert drafting, critique loops, and Chairman synthesis.
+* **Orchestration:** Lazy multi-threaded Tokio runtime running an N-round panel discussion — an opening statement made in isolation, reaction rounds, and a closing statement — with all experts drafting each round in parallel. There is no synthesis/Chairman step; it was removed 2026-07-14 and is deferred to Milestone 9.
 * **Roadmap Direction:** Native LiteRT-LM execution (Gemma 4 variants multiplexed into prompt-driven expert personas) for a cost-free offline option.
 
 ---
