@@ -6,6 +6,17 @@ This document tracks technical changes, refactoring milestones, and build-system
 
 ---
 
+## [2026-09-03]
+
+### Changed
+- **`.github/workflows/claude-review.yml`, `claude-fix.yml` — the agents run Fable 5.1** (`20a2bd5`).
+  The reviewer moves from `claude-opus-5` to `claude-fable-5-1` at `--effort medium`, its setting
+  everywhere it is deployed (owner, 2026-09-03); the fixer to `claude-fable-5-1` at `--effort high`.
+  Both workflows are dispatch-only here, so this changes what a manual dispatch runs. `--effort` is
+  passed explicitly: the action forwards `claude_args` to the CLI unchanged and the CLI accepts it,
+  but the action's docs do not list it, so the workflow comment names that line as the suspect if
+  a dispatch ever fails on an unknown flag.
+
 ## [2026-08-10]
 
 _All code changes in this entry: `13027e6`._
