@@ -2,9 +2,18 @@
 
 This is the entry point for any agent or developer working on Council-of-Experts (the
 multi-provider LLM council app). This is an independent GitHub repo. Internal engineering
-notes — changelog, current state, roadmap — live in [notes/](notes/). Before starting work,
-read [notes/STATE.md](notes/STATE.md) for the current state of the project and the most
-immediate must-do items.
+notes are **private and are not in this repository** (owner, 2026-09-08). They live in the
+organisation's private `Notes` repo, under `Council-of-Experts/`.
+
+Where both repos are checked out side by side, `notes/` here is a symlink to that directory
+and every `notes/...` path below resolves exactly as it always did — which is why `notes` is
+gitignored rather than committed. In a clone of *this* repo alone it is simply absent, and
+that is the point: this repository is public and those documents are not.
+
+Before starting work, read `notes/STATE.md` for the current state of the project and the most
+immediate must-do items. If you cannot reach it, say so rather than working around it — it is
+the only curated statement of where this project stands, and guessing at it is how two
+sessions end up building different things.
 
 ---
 
@@ -22,8 +31,8 @@ immediate must-do items.
 
 * This repo is a standalone Rust + SwiftUI repository: a multi-provider LLM "council" that
   drafts, critiques, and synthesizes answers in parallel, evolving toward a multi-source
-  agentic coding platform. State and roadmap live in [notes/STATE.md](notes/STATE.md) and
-  [notes/architecture-and-roadmap.md](notes/architecture-and-roadmap.md).
+  agentic coding platform. State and roadmap live in `notes/STATE.md` and
+  `notes/architecture-and-roadmap.md` — private, see the note at the top of this file.
 
 ---
 
@@ -78,7 +87,8 @@ case-insensitive macOS/Windows.
 * ⚠ **A rule in this file is not an enforcement mechanism.** The authority is the branch
   protection on `main`; this section only explains it. If a direct push to `main` ever
   *succeeds*, the protection is missing or was bypassed — report that rather than treating it
-  as permission.* **Review feedback is closed with the `claude-fix` label, not by hand-waving.** The review
+  as permission.
+* **Review feedback is closed with the `claude-fix` label, not by hand-waving.** The review
   workflow only comments; `.github/workflows/claude-fix.yml` is what acts on those comments.
   Add the `claude-fix` label to the PR and the fix agent reads the inline comments, commits
   the fixes, replies, and removes the label. It is label-gated deliberately: firing it
@@ -88,19 +98,28 @@ case-insensitive macOS/Windows.
   back in a reply where a finding is wrong, rather than making a change it believes is wrong.
 
 
-### 2. Changelog Maintenance Requirement
+### 2. Changelog — RETIRED 2026-09-08
 
-* The project changelog lives at [notes/CHANGELOG.md](notes/CHANGELOG.md). Append a detailed chronological entry describing all technical modifications, refactoring milestones, and build-system changes **after committing** the corresponding work.
-* **Scope: code work only.** Changelog entries are required for source, build-config, and dependency-manifest changes (`crates/`, `platforms/`, `build_app.sh`/`build_frameworks.sh`, `Cargo.toml`/`Cargo.lock`, build scripts). They are **not** required for docs-only commits (`*.md`, comments-only changes).
-* Every entry must be accompanied by the short 7-character commit SHA associated with the work.
-* **The changelog is append-only across a release cycle.** Do not prune, rewrite, or remove historical entries. Entries are pruned/rolled over **only** when we tag and release a new version of the overall project — at which point the released entries are collected under that version's heading and the working section is reset for the next cycle.
-* New entries go at the top under the current date, following the existing `Added` / `Changed` / `Fixed` / `Removed` structure.
+⚠ **This project has no changelog, and the requirement to keep one is withdrawn** (owner,
+2026-09-08). `notes/CHANGELOG.md` was deleted rather than moved to the private notes repo.
+Do not recreate it, and do not act on an older instruction — in a stale checkout, a cached
+copy of this file, or your own memory of this repo — telling you to append an entry after
+committing. That instruction stood here until this commit, so expect to meet it again.
+
+The history is not lost: the file was last present at `0b8b214`, so
+`git show 0b8b214:notes/CHANGELOG.md` reads it.
+
+⚠ **What the changelog was load-bearing for is now stated in §3 directly.** §3 used to define
+its own scope by pointing here — "the same code changes that warrant changelog entries" — and
+told a reviewer to cross-reference the changelog. With no §2 scope to point at, that would
+have been a rule defined in terms of a deleted one. The commit history is the record a review
+reads now.
 
 ### 3. Code Review Execution Standards
 
-* **Scope: code work only.** Code reviews cover the same code changes that warrant changelog entries (see §2) — source, build config, and dependency manifests. Docs-only commits are out of scope and need no review.
-* When performing a code review, cross-reference the changelog and corresponding commits.
-* Create a review document matching the format `notes/code-review-[year][month][day]-[hhmmss].md`. Begin the document with the first evaluated short commit SHA, and end with the last evaluated commit SHA.
+* **Scope: code work only** — source, build config, and dependency manifests (`crates/`, `platforms/`, `build_app.sh`/`build_frameworks.sh`, `Cargo.toml`/`Cargo.lock`, build scripts). Docs-only commits (`*.md`, comments-only changes) are out of scope and need no review. This scope was defined in §2 until the changelog was retired; it is stated here now so it does not depend on a section that no longer exists.
+* When performing a code review, cross-reference the commit history for the range under review. There is no changelog to read alongside it.
+* Create a review document matching the format `notes/code-review-[year][month][day]-[hhmmss].md` — which now lands in the private notes repo, not here. Begin the document with the first evaluated short commit SHA, and end with the last evaluated commit SHA.
 * Determine the range of commits to review by starting with the commit immediately following the end SHA of the *previous* code review. If no prior review exists, use all commits from the previous and current day.
 * Once the new code review document has been written, delete the previous one to keep only the latest review active.
-* Repoint the **Latest code review** pointer in [notes/STATE.md](notes/STATE.md) to the new document (only the link target changes; the surrounding line is phrased generically) so a session can find the current review without globbing the folder.
+* Repoint the **Latest code review** pointer in `notes/STATE.md` to the new document (only the link target changes; the surrounding line is phrased generically) so a session can find the current review without globbing the folder.
