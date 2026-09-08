@@ -14,3 +14,6 @@ DerivedData/
 /CouncilOfExperts.app/
 
 .obsidian/
+# Working notes are private and live in the org Notes repo; `notes` is a
+# symlink to Notes/Council-of-Experts. It must never be committed here.
+/notes
